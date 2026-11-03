@@ -47,7 +47,7 @@ LINE 公式アカウントは、前から持っていた空のアカウントの
 
 ## 評価（読み取りの正答率）
 - 公開の評価セット：架空のお便り15枚 `eval/public/`（誰でも同じ採点を再現できる）。`npm run eval -- --set public --tag <名前>`
-- 11/3：指示文に決まりを6つ足して **全部○ 6/15 → 13/15、でっち上げ 7件 → 0件**（`docs/eval-history.md`）
+- 11/3：指示文に決まりを6つ足して **全部○ 6/15 → 15/15、でっち上げ 7件 → 0件**（決まりを8つ足した）（`docs/eval-history.md`）
 - 実物のお便りは子どもの情報を含むため非公開（`eval/private/`）。数字だけ `docs/eval-history.md` に出す
 - 採点の観点10個と回し方：Claude Code の `/eval`（`.claude/skills/eval/`）
 
