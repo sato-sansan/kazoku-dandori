@@ -1,6 +1,6 @@
 // 家族の予定ページ（ログインなし・合言葉つき URL）と購読用の ICS。純粋関数だけ（取り出し・保存は family.ts）
-// ばあばがスマホで見る前提：375px で横スクロールなし、字は「あ 小中大」で 16/18/22px、色は3色（予定・送迎・未定）＋黒白、ボタンは 44px 以上
-// 月は Google カレンダーと同じ升目。週は無理に7列にせず、1日ずつ縦に並べる（768px 以上で7列）
+// ばあばがスマホで見る前提：390px で横スクロールなし、字は「あ 小中大」で 17/18/22px、ボタンは 44px 以上
+// 最初は月の升目（1画面で月全体。子どもごとの色の頭文字と、送迎の？で一目）。日を押すとその週を1日ずつ縦に（768px 以上で7列）
 
 import type { Card } from "./card";
 import type { Slot } from "./types";
@@ -109,26 +109,68 @@ function cardTitle(card: Card) {
 }
 
 // ── 画面 ─────────────────────────────────────────────────
-// スマホ優先（375px で横スクロールなし）。週は1日ずつ縦に並ぶ予定表（768px 以上で7列）、月は升目
-// 文字は「あ 小・中・大」で 16/18/22px。色は青（予定）・緑（送迎）・赤（未定）＋黒白、コントラスト比 4.5 以上
+// 最初は「月」。1画面で月全体が見え、日ごとに「だれの予定があるか」（子どもごとの色の頭文字）と
+// 「送迎が決まっているか」（赤い「？」／担当の頭文字）が一目で分かる。日を押すとその週に切り替わり、中身が読める。
+// 文字は「あ 小・中・大」で 17/18/22px。クリーム地・濃茶の字・子どもごとのパステル
 
-/** 1枚のカード（週・月の詳細・日付未定の欄で使う） */
-function cardHtml(card: Card, showTime: boolean) {
-  const time = showTime && card.time ? `<span class="t">${esc(card.time)}</span> ` : "";
-  const note = cardNote(card);
-  return `<div class="ev">${time}<b>${esc(cardTitle(card))}</b>${note ? `<small>${esc(note)}</small>` : ""}</div>`;
+/** 子どもごとの色。呼び名の出てきた順に割り当てる（6色まで。それ以上は繰り返し） */
+const CHILD_COLORS = [
+  { bg: "#F7C4CB", fg: "#7A1F2E" },
+  { bg: "#BFE0FF", fg: "#103E74" },
+  { bg: "#FFE28F", fg: "#6A4700" },
+  { bg: "#C8ECB8", fg: "#1E5A1E" },
+  { bg: "#E2D2FF", fg: "#46287A" },
+  { bg: "#FFD3AE", fg: "#7A3900" },
+];
+
+/** 大人の頭文字（月の升に入れる） */
+function adultInitial(name: string) {
+  return name === "じいじ" ? "じ" : name === "ばあば" ? "ば" : name === "パパ" ? "パ" : name === "ママ" ? "マ" : name.slice(0, 1);
 }
 
-/** 日ごとの送迎の担当。「朝 ママ」「夕 ばあば」。同じ種類が2つ以上ある日は「17:30 保育所 じいじ」と時刻と場所で呼ぶ。未定は赤＋太字＋「だれ？」の文字 */
+/** 呼び名 → 色番号。カードと送迎に出てくる子どもを、出てきた順に */
+function childIndex(input: CalendarInput) {
+  const order: string[] = [];
+  const add = (name: string) => {
+    if (name && name !== "全員" && !order.includes(name)) order.push(name);
+  };
+  for (const c of input.cards) add(c.child);
+  for (const s of input.slots) for (const n of s.children) add(n);
+  return new Map(order.map((name, i) => [name, i]));
+}
+
+function childStyle(idx: Map<string, number>, name: string) {
+  const c = CHILD_COLORS[(idx.get(name) ?? 0) % CHILD_COLORS.length];
+  return `style="background:${c.bg};color:${c.fg}"`;
+}
+
+/** 凡例：● ゆい ● そうた。呼び名だけ */
+function legendHtml(idx: Map<string, number>) {
+  if (idx.size === 0) return "";
+  const items = [...idx.keys()].map((n) => `<span class="lg"><i ${childStyle(idx, n)}>${esc(n.slice(0, 1))}</i>${esc(n)}</span>`);
+  items.push(`<span class="lg"><i class="all">全</i>みんな</span>`);
+  items.push(`<span class="lg"><i class="nd">？</i>送迎 未定</span>`);
+  return `<div class="legend" aria-label="色の意味">${items.join("")}</div>`;
+}
+
+/** 1枚のカード（週の中身・日付未定の欄で使う）。子どもの色を左に */
+function cardHtml(card: Card, showTime: boolean, idx: Map<string, number>) {
+  const time = showTime && card.time ? `<span class="t">${esc(card.time)}</span>` : "";
+  const note = cardNote(card);
+  const who = card.child && card.child !== "全員" ? `<i class="ci" ${childStyle(idx, card.child)}>${esc(card.child.slice(0, 1))}</i>` : `<i class="ci all">全</i>`;
+  return `<div class="ev">${who}<div class="evb">${time}<b>${esc(cardTitle(card))}</b>${note ? `<small>${esc(note)}</small>` : ""}</div></div>`;
+}
+
+/** 日ごとの送迎の担当。「朝 ママ」「夕 ばあば」。同じ種類が2つ以上ある日は「17:30 保育所 じいじ」。未定は赤＋「だれ？」 */
 function slotChips(slots: Slot[]) {
   const sorted = [...slots].sort((a, b) => a.time.localeCompare(b.time));
   return sorted
     .map((s) => {
       const same = sorted.filter((o) => o.kind === s.kind).length;
-      const label = same > 1 ? `${s.time} ${s.place}` : s.kind === "送り" ? "朝" : "夕";
+      const label = same > 1 ? `${s.time} ${s.place}` : s.kind === "送り" ? "朝の送り" : "お迎え";
       const who = s.who ?? "だれ？";
       const nd = undecided(s);
-      return `<span class="chip${nd ? " nd" : ""}"${nd ? ' aria-label="送迎の担当がまだ決まっていません"' : ""}>${esc(label)} ${esc(who)}</span>`;
+      return `<span class="chip${nd ? " nd" : ""}"${nd ? ' aria-label="送迎の担当がまだ決まっていません"' : ""}>${esc(label)}：${esc(who)}</span>`;
     })
     .join("");
 }
@@ -153,150 +195,181 @@ function navLink(baseUrl: string, view: CalendarInput["view"], anchor: string) {
   return esc(`${baseUrl}?view=${view}&anchor=${anchor}`);
 }
 
-/** 日付の見出し。「3（火）」。今日は色つき＋「今日」の文字 */
-function dayHead(date: string, today: string, tag: "h2" | "h3") {
+/** 日付の見出し。「3（火）」。今日は丸で囲み「今日」 */
+function dayHead(date: string, today: string) {
   const [, , dd] = date.split("-").map(Number);
-  const isToday = date === today;
-  return `<${tag} class="dn"><span class="num">${dd}</span><span class="wd">${WEEKDAY[jstWeekday(date)]}</span>${isToday ? '<span class="tdy">今日</span>' : ""}</${tag}>`;
+  const wd = jstWeekday(date);
+  return `<h3 class="dn"><span class="num${wd === 0 ? " sun" : wd === 6 ? " sat" : ""}">${dd}</span><span class="wd">${WEEKDAY[wd]}</span>${date === today ? '<span class="tdy">今日</span>' : ""}</h3>`;
 }
 
 /** 1日ぶんの中身：送迎の担当 → 予定（時刻順）→ 写真。何もなければ「予定なし」 */
-function dayBody(date: string, input: CalendarInput, slots: Slot[]) {
+function dayBody(date: string, input: CalendarInput, slots: Slot[], idx: Map<string, number>) {
   const daySlots = slots.filter((s) => s.date === date);
   const cards = input.cards.filter((c) => c.date === date).sort(byTime);
   const photos = input.photos.filter((p) => p.date === date);
   if (daySlots.length === 0 && cards.length === 0 && photos.length === 0) return `<p class="none">予定なし</p>`;
-  return `${daySlots.length > 0 ? `<div class="chips">${slotChips(daySlots)}</div>` : ""}${cards.map((c) => cardHtml(c, true)).join("")}${photos.length > 0 ? `<div class="thumbs">${photos.map(photoThumb).join("")}</div>` : ""}`;
+  return `${daySlots.length > 0 ? `<div class="chips">${slotChips(daySlots)}</div>` : ""}${cards.map((c) => cardHtml(c, true, idx)).join("")}${photos.length > 0 ? `<div class="thumbs">${photos.map(photoThumb).join("")}</div>` : ""}`;
 }
 
-/** 週：月曜から日曜まで1日ずつ縦に並べる（768px 以上は7列） */
-function weekHtml(input: CalendarInput, on: boolean) {
-  const monday = mondayOf(input.anchor);
-  const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
-  const slots = liveSlots(input.slots);
-  const list = days
-    .map((d) => `<section class="day${d === input.today ? " today" : ""}">${dayHead(d, input.today, "h2")}${dayBody(d, input, slots)}</section>`)
+/** 月の升の中身：日付、子どもごとの頭文字（1人1つ）、送迎（未定は赤い？・決まれば担当の頭文字）、写真は 📷 */
+function cellInner(d: string, input: CalendarInput, slots: Slot[], idx: Map<string, number>, photoDays: Set<string>) {
+  const [, , dd] = d.split("-").map(Number);
+  const wd = jstWeekday(d);
+  // 升の中は「何の予定か」まで読めるように、子どもの色の札に題名を入れる（3件まで。長い題名は…で切る）
+  const cards = input.cards.filter((c) => c.date === d).sort(byTime);
+  const daySlots = slots.filter((s) => s.date === d).sort((a, b) => a.time.localeCompare(b.time));
+  const marks: string[] = [];
+  if (daySlots.some(undecided)) marks.push(`<i class="pk nd" title="送迎の担当が未定">？</i>`);
+  for (const s of daySlots.filter((s) => !undecided(s)).slice(0, 2)) marks.push(`<i class="pk ok">${esc(adultInitial(s.who ?? ""))}</i>`);
+  const chips = cards
+    .slice(0, 3)
+    .map((c) => {
+      // だれの予定かは色で（凡例と同じ）。升が狭いので頭文字は付けず、題名だけを入れる
+      const all = !c.child || c.child === "全員";
+      return `<i class="mev${all ? " all" : ""}" ${all ? "" : childStyle(idx, c.child)} title="${esc(c.title)}">${esc(c.title)}</i>`;
+    })
     .join("");
-  const label = `${shortDate(days[0])}〜${shortDate(days[6])}`;
-  return `<section id="week" class="view${on ? " on" : ""}" data-prev="${navLink(input.baseUrl, "week", addDays(monday, -7))}" data-next="${navLink(input.baseUrl, "week", addDays(monday, 7))}" data-today="${navLink(input.baseUrl, "week", input.today)}">
-<p class="range">${esc(label)}</p>
-<div class="days">${list}</div>
-</section>`;
+  const extra = cards.length > 3 ? `<span class="more">+${cards.length - 3}</span>` : "";
+  return `<span class="dn"><span class="num${wd === 0 ? " sun" : wd === 6 ? " sat" : ""}">${dd}</span>${photoDays.has(d) ? '<span class="cam" aria-label="写真あり">📷</span>' : ""}</span><span class="evs">${chips}${extra}</span><span class="pks">${marks.join("")}</span>`;
 }
 
-/** 月：升目。1升に題名を最大2つ、超えたら「+n」。送迎の未定は赤い「だれ？」、写真は 📷。升をタップするとその日の予定が下に広がる */
-function monthHtml(input: CalendarInput, on: boolean) {
+/** 月の升目と、その月の各週の中身（週の表示は、この中身を1週ずつ出す）。1枚に全部入れておき、切り替えは JS で */
+function monthAndWeeks(input: CalendarInput, idx: Map<string, number>) {
   const first = firstOfMonth(input.anchor);
   const next = addMonths(first, 1);
   const start = mondayOf(first);
   const slots = liveSlots(input.slots);
   const photoDays = new Set(input.photos.map((p) => p.date));
-  const todayIn = input.today >= first && input.today < next;
   const cells: string[] = [];
-  const details: string[] = [];
-  // 月末の日曜まで。最大6週
+  const weeks: string[] = [];
+  let week: string[] = [];
+  let monday = start;
   for (let d = start; d < next || jstWeekday(d) !== 1; d = addDays(d, 1)) {
-    const inMonth = d >= first && d < next;
-    const [, , dd] = d.split("-").map(Number);
-    const cards = input.cards.filter((c) => c.date === d).sort(byTime);
-    const nd = slots.some((s) => s.date === d && undecided(s));
-    const shown = cards.slice(0, 2);
-    const more = cards.length - shown.length;
-    const cls = ["mcell", inMonth ? "" : "out", d === input.today ? "today" : ""].filter(Boolean).join(" ");
-    const inner = `<span class="dn"><span class="num">${dd}</span>${photoDays.has(d) ? '<span class="cam" aria-label="写真あり">📷</span>' : ""}</span>${nd ? '<span class="mt nd">だれ？</span>' : ""}${shown.map((c) => `<span class="mt">${esc(cardTitle(c))}</span>`).join("")}${more > 0 ? `<span class="more">+${more}</span>` : ""}`;
-    if (!inMonth) {
-      cells.push(`<div class="${cls}" aria-hidden="true">${inner}</div>`);
-      continue;
+    if (jstWeekday(d) === 1) {
+      monday = d;
+      week = [];
     }
-    const id = `md-${esc(d)}`;
-    const open = d === input.today;
-    cells.push(`<button type="button" class="${cls}" data-day="${esc(d)}" aria-controls="${id}" aria-expanded="${open}" aria-label="${esc(shortDate(d))}の予定を見る">${inner}</button>`);
-    details.push(`<div class="mday${d === input.today ? " today" : ""}" id="${id}"${open ? "" : " hidden"}>${dayHead(d, input.today, "h3")}${dayBody(d, input, slots)}</div>`);
+    const inMonth = d >= first && d < next;
+    const cls = ["mcell", inMonth ? "" : "out", d === input.today ? "today" : ""].filter(Boolean).join(" ");
+    const inner = cellInner(d, input, slots, idx, photoDays);
+    cells.push(`<button type="button" class="${cls}" data-day="${esc(d)}" data-week="${esc(monday)}" aria-label="${esc(shortDate(d))}の予定を見る">${inner}</button>`);
+    week.push(`<section class="day${d === input.today ? " today" : ""}${inMonth ? "" : " out"}" id="d-${esc(d)}" data-day="${esc(d)}">${dayHead(d, input.today)}${dayBody(d, input, slots, idx)}</section>`);
+    if (jstWeekday(d) === 0) {
+      const [, m1, d1] = monday.split("-").map(Number);
+      const [, m2, d2] = d.split("-").map(Number);
+      const label = `${m1}/${d1}〜${m1 === m2 ? "" : `${m2}/`}${d2}`;
+      weeks.push(`<div class="wk" data-week="${esc(monday)}" data-label="${esc(label)}" data-prev="${esc(addDays(monday, -7))}" data-next="${esc(addDays(monday, 7))}" hidden>${week.join("")}</div>`);
+    }
   }
-  return `<section id="month" class="view${on ? " on" : ""}" data-prev="${navLink(input.baseUrl, "month", addMonths(first, -1))}" data-next="${navLink(input.baseUrl, "month", next)}" data-today="${navLink(input.baseUrl, "month", input.today)}">
-<p class="range">${esc(monthLabel(first))}</p>
-<div class="mgrid">${WEEKDAY.slice(1).concat(WEEKDAY[0]).map((w) => `<div class="mh">${w}</div>`).join("")}${cells.join("")}</div>
-<p class="hint">日にちを押すと、その日の予定が下に出ます</p>
-<div class="mdetail">${details.join("")}</div>
-${todayIn ? "" : `<p class="none">今日はこの月にありません</p>`}
+  const head = WEEKDAY.slice(1)
+    .concat(WEEKDAY[0])
+    .map((w, i) => `<div class="mh${i === 5 ? " sat" : i === 6 ? " sun" : ""}">${w}</div>`)
+    .join("");
+  const month = `<section id="month" class="view" data-label="${esc(monthLabel(first))}" data-prev="${navLink(input.baseUrl, "month", addMonths(first, -1))}" data-next="${navLink(input.baseUrl, "month", next)}">
+<div class="mgrid">${head}${cells.join("")}</div>
+<p class="hint">日にちを押すと、その週の予定が読めます</p>
 </section>`;
+  const weekSec = `<section id="week" class="view" data-first="${esc(start)}" data-last="${esc(monday)}">
+<button type="button" class="btn back" id="back">← 月に戻る</button>
+${weeks.join("")}
+</section>`;
+  return { month, weekSec, first };
 }
 
 /** 日付が読めなかったカード。一番下にまとめる */
-function undatedHtml(cards: Card[]) {
+function undatedHtml(cards: Card[], idx: Map<string, number>) {
   const list = cards.filter((c) => !c.date);
   if (list.length === 0) return "";
-  return `<section class="undated"><h2>日付が決まっていない予定</h2>${list.map((c) => cardHtml(c, false)).join("")}</section>`;
+  return `<section class="undated"><h2>日付が決まっていない予定</h2>${list.map((c) => cardHtml(c, false, idx)).join("")}</section>`;
 }
 
-// 文字の大きさは html の font-size（rem の基準）で決める。16/18/22px
+// 文字の大きさは html の font-size（rem の基準）で決める。17/18/22px。升の数字は 0.85rem（15px 以上）
 const CSS = `
-:root{--ink:#222;--sub:#555;--line:#ccc;--bg2:#f6f6f6;--ev:#1a5fb4;--ev-bg:#e6eefc;--sv:#0f6236;--sv-bg:#e3f3ea;--nd:#b3121d;--nd-bg:#fbe4e6;--today:#fff6d6}
+:root{--ink:#3A2F24;--sub:#7A6A56;--line:#E6D9C3;--bg:#FFF8EA;--card:#FFFFFF;--bg2:#F6EEDD;--ev:#1F6F8B;--sv:#2E7D5B;--sv-bg:#DFF2E6;--nd:#C0392B;--nd-bg:#FDE3E0;--today:#3A2F24;--tdy-bg:#FFF1C2}
 html{font-size:18px;-webkit-text-size-adjust:100%}
-html[data-fs=s]{font-size:16px}
+html[data-fs=s]{font-size:17px}
 html[data-fs=l]{font-size:22px}
 *{box-sizing:border-box;min-width:0}
-body{margin:0;padding:12px;font:1rem/1.45 -apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;color:var(--ink);background:#fff;overflow-x:hidden}
-h1{font-size:1.3rem;margin:0 0 8px}
+body{margin:0;font:1rem/1.45 -apple-system,"Hiragino Maru Gothic ProN","Hiragino Sans","Noto Sans JP",sans-serif;color:var(--ink);background:var(--bg);overflow-x:clip}
+h1{font-size:1.15rem;margin:0}
 h2{font-size:1.1rem;margin:16px 0 8px}
-h3{font-size:1.05rem;margin:0 0 6px}
+h3{font-size:1rem;margin:0 0 6px}
 p{margin:8px 0}
 a{color:var(--ev)}
 button{font:inherit;color:inherit}
-.ctl{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0}
-.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:6px 12px;border:2px solid var(--ev);border-radius:10px;background:#fff;color:var(--ev);font-weight:bold;text-decoration:none;cursor:pointer;line-height:1.2;white-space:nowrap}
-.btn[aria-pressed=true]{background:var(--ev);color:#fff}
+.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:2px solid var(--line);padding:6px 10px 5px;display:flex;flex-direction:column;gap:5px}
+.row{display:flex;align-items:center;gap:4px;flex-wrap:nowrap;width:100%}
+.row>*{flex-shrink:0}
+.row>.range,.row>h1{flex:1 1 0;min-width:2rem}
+.row1 h1{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:4px 10px;border:2px solid var(--ink);border-radius:12px;background:var(--card);color:var(--ink);font-weight:bold;text-decoration:none;cursor:pointer;line-height:1.2;white-space:nowrap}
+.btn[aria-pressed=true]{background:var(--ink);color:#fff}
+.btn.sm{min-width:40px;min-height:40px;padding:2px 7px;border-radius:10px}
+.range{flex:1 1 auto;text-align:center;font-weight:bold;font-size:1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.02em}
 .grp{display:inline-flex;gap:4px;align-items:center}
 .grp .lab{font-weight:bold;color:var(--sub);padding:0 2px}
-.grp .fs{min-width:44px;padding:6px 8px}
-.range{font-weight:bold;font-size:1.1rem;margin:8px 0}
+.grp .fs{min-width:34px;padding:2px 5px;min-height:34px;border-width:1px;border-radius:8px;font-size:.9rem}
+.legend{display:flex;flex-wrap:wrap;gap:2px 10px;font-size:.8rem;color:var(--sub);line-height:1.3}
+.lg{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.ci,.lg i{display:inline-flex;align-items:center;justify-content:center;width:1.35rem;height:1.35rem;border-radius:50%;font-size:.8rem;font-weight:bold;font-style:normal;flex-shrink:0}
+.ci.all,.lg i.all{background:#E8E1D3;color:var(--ink)}
+.lg i.nd{background:var(--nd);color:#fff}
+main{padding:10px 12px 24px}
 .view{display:none}
 .view.on{display:block}
-.today{background:var(--today)}
 .num{font-weight:bold}
+.num.sun{color:var(--nd)}
+.num.sat{color:var(--ev)}
 .dn{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .wd{color:var(--sub);font-weight:normal}
-.tdy{font-size:.85em;background:var(--ev);color:#fff;border-radius:999px;padding:1px 10px}
+.tdy{font-size:.8em;background:var(--ink);color:#fff;border-radius:999px;padding:1px 10px}
 .none{color:var(--sub);margin:4px 0}
-.hint{color:var(--sub);font-size:.9rem;margin:6px 0}
-/* 週：1日ずつ縦 */
-.days{display:flex;flex-direction:column;gap:10px}
-.day{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:#fff}
-.day.today{border-color:var(--ev);border-width:2px}
-.day h2{margin:0 0 6px}
-.day.today .num,.mday.today .num{display:inline-block;min-width:36px;height:36px;line-height:36px;text-align:center;border-radius:50%;background:var(--ev);color:#fff}
+.hint{color:var(--sub);font-size:.85rem;margin:8px 0 0;text-align:center}
+/* 月：升目 */
+.mgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
+.mh{text-align:center;color:var(--sub);font-weight:bold;font-size:.8rem;padding:2px 0}
+.mh.sun{color:var(--nd)}.mh.sat{color:var(--ev)}
+.mcell{display:flex;flex-direction:column;align-items:stretch;gap:2px;min-height:4rem;padding:3px 1px 4px;text-align:left;background:var(--card);border:2px solid transparent;border-radius:8px;cursor:pointer;box-shadow:0 1px 0 var(--line)}
+.mcell .dn{gap:2px;line-height:1.1;justify-content:space-between}
+.mcell .num{font-size:.85rem}
+.mcell .cam{font-size:.7rem}
+.mcell.today{border-color:var(--today);background:var(--tdy-bg)}
+.mcell.today .num{background:var(--ink);color:#fff;border-radius:50%;width:1.4rem;height:1.4rem;display:inline-flex;align-items:center;justify-content:center}
+.mcell.out{background:transparent;box-shadow:none;color:#B5A692}
+.mcell.out .ci,.mcell.out .pk{opacity:.45}
+.evs{display:flex;flex-direction:column;gap:2px;min-width:0}
+.mev{display:block;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:.64rem;letter-spacing:-.02em;line-height:1.4;font-style:normal;border-radius:4px;padding:0 2px;color:var(--ink)}
+.mev.all{background:#E9E3D8}
+.pks{display:flex;gap:2px;margin-top:auto}
+.pk{display:inline-flex;align-items:center;justify-content:center;min-width:1.15rem;height:1.15rem;padding:0 3px;border-radius:5px;font-size:.7rem;font-weight:bold;font-style:normal}
+.pk.nd{background:var(--nd);color:#fff}
+.pk.ok{background:var(--sv-bg);color:var(--sv)}
+.more{font-size:.7rem;color:var(--sub)}
+/* 週：1日ずつ縦（768px 以上は7列） */
+.back{margin:0 0 10px}
+.wk{display:flex;flex-direction:column;gap:10px}
+.wk[hidden]{display:none}
+.day{border:1px solid var(--line);border-radius:12px;padding:8px 10px;background:var(--card);scroll-margin-top:var(--top,160px)}
+.day.out{opacity:.75}
+.day.today{border:2px solid var(--ink);background:var(--tdy-bg)}
+.day.sel{outline:3px solid var(--ev);outline-offset:1px}
+.day h3{margin:0 0 6px}
+.day.today .num{display:inline-block;min-width:36px;height:36px;line-height:36px;text-align:center;border-radius:50%;background:var(--ink);color:#fff}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 6px}
 .chip{display:inline-block;padding:4px 12px;border-radius:999px;background:var(--sv-bg);color:var(--sv);font-weight:bold;border:2px solid transparent}
 .chip.nd{background:var(--nd-bg);color:var(--nd);border-color:var(--nd)}
-.ev{background:var(--ev-bg);border-left:5px solid var(--ev);border-radius:6px;padding:6px 8px;margin:4px 0;overflow-wrap:anywhere}
-.ev .t{color:var(--ev);font-weight:bold}
-.ev small{display:block;font-size:1em;color:var(--sub)}
+.ev{display:flex;gap:8px;align-items:flex-start;background:var(--bg2);border-radius:8px;padding:6px 8px;margin:4px 0;overflow-wrap:anywhere}
+.ev .ci{margin-top:2px}
+.evb{flex:1 1 auto}
+.ev .t{color:var(--ev);font-weight:bold;margin-right:6px}
+.ev small{display:block;font-size:.95em;color:var(--sub)}
 .thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
-.notices{margin-top:20px;padding-top:12px;border-top:2px solid #ddd}
+.notices{margin-top:20px;padding-top:12px;border-top:2px solid var(--line)}
 .notices h2{font-size:1.1em;margin:0 0 8px}
 .nt{margin:0;width:calc(50% - 3px)}
 .nt .ph{width:100%}
 .nt img{width:100%;height:auto}
-.nt figcaption{font-size:.9em;color:#333}
-/* 月：升目 */
-.mgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:1px solid var(--line);border-left:1px solid var(--line);background:#fff}
-.mgrid>*{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:3px 2px}
-.mh{text-align:center;background:var(--bg2);color:var(--sub);font-weight:bold}
-.mcell{display:flex;flex-direction:column;align-items:stretch;gap:1px;aspect-ratio:1/1;text-align:left;background:#fff;border:0;border-right:1px solid var(--line);border-bottom:1px solid var(--line);cursor:pointer}
-.mcell>*{flex-shrink:0}
-@supports not (aspect-ratio:1/1){.mcell{min-height:44px}}
-.mcell .dn{gap:2px;line-height:1.2}
-.mcell[aria-expanded=true]{outline:3px solid var(--ev);outline-offset:-3px}
-.mcell.today{background:var(--today)}
-.mcell.out{color:#666;background:#fafafa;cursor:default}
-.mcell .cam{font-size:.8em}
-.mt{display:block;white-space:nowrap;overflow:hidden;text-overflow:clip;font-size:.72em;line-height:1.3;background:var(--ev-bg);color:var(--ev);border-left:3px solid var(--ev);padding:0 2px}
-.mt.nd{background:var(--nd-bg);color:var(--nd);border-left-color:var(--nd);font-weight:bold}
-.out .mt{opacity:.6}
-.more{font-size:.72em;color:var(--sub);line-height:1.3}
-.mdetail{margin-top:10px}
-.mday{border:2px solid var(--ev);border-radius:10px;padding:8px 10px;background:#fff}
-.mday.today{background:var(--today)}
+.nt figcaption{font-size:.9em;color:var(--ink)}
 /* 写真 */
 .ph{border:0;padding:0;background:none;cursor:pointer;margin:0;min-width:44px;min-height:44px}
 .ph img{width:80px;height:80px;object-fit:cover;border-radius:6px;border:1px solid var(--line);display:block}
@@ -306,24 +379,24 @@ button{font:inherit;color:inherit}
 #lb p{color:#fff;margin:0}
 #lb .close{position:absolute;top:8px;right:8px}
 .undated .ev{max-width:600px}
-.howto{margin:8px 0;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg2)}
+.howto{margin:12px 0 0;padding:8px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
 .howto summary{cursor:pointer;font-weight:bold;min-height:44px;display:flex;align-items:center}
-.howto code{display:block;overflow-wrap:anywhere;user-select:all;-webkit-user-select:all;margin-top:4px;background:#fff;padding:6px;border-radius:6px}
-.howto ol{margin:4px 0 0;padding-left:24px}
+.howto code{display:block;overflow-wrap:anywhere;user-select:all;-webkit-user-select:all;margin-top:4px;background:var(--bg2);padding:6px;border-radius:6px}
+.howto ol,.howto ul{margin:4px 0 0;padding-left:24px}
 .howto p{margin:8px 0 0}
 @media(min-width:768px){
-  body{padding:16px 20px;max-width:1200px;margin:0 auto}
-  .days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
-  .day{padding:8px}
-  .mcell{padding:4px}
-  .mt,.more{font-size:.9em}
-  .mt{text-overflow:ellipsis}
-  .mcell .cam{font-size:1em}
+  .top{padding:10px 20px 8px}
+  main{padding:14px 20px 24px;max-width:1200px;margin:0 auto}
+  .wk{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+  .mcell{min-height:6rem;padding:6px}
+  .mcell .num{font-size:1rem}
+  .mcell .ci{width:1.4rem;height:1.4rem;font-size:.85rem}
+  .pk{font-size:.85rem;height:1.4rem}
 }
-@media print{.ctl,.howto,.hint{display:none}.view{display:block}body{padding:0}}
+@media print{.top,.howto,.hint,.back{display:none}.view,.wk{display:block}main{padding:0}}
 `;
 
-// JS は4つだけ：文字の大きさ／週↔月の切り替え（前・次・今日のリンクも差し替え）／月の升を押すとその日の予定／写真の拡大
+// JS は5つ：文字の大きさ／月↔週の切り替え（前・次・今日も表示に合わせる）／月の升を押すとその週へ／週の前後は同じ月の中なら読み込みなし／写真の拡大
 const JS = `
 (function(){
   var KEY='dandori-fs';
@@ -337,45 +410,81 @@ const JS = `
   fs(saved==='s'||saved==='l'?saved:'m',false);
   document.querySelectorAll('.fs').forEach(function(b){b.addEventListener('click',function(){fs(b.dataset.fs,true)})});
 
+  var P=window.__cal||{};
+  var month=document.getElementById('month'),week=document.getElementById('week');
+  var range=document.getElementById('range'),prev=document.getElementById('nav-prev'),next=document.getElementById('nav-next'),today=document.getElementById('nav-today');
   var vbtns=document.querySelectorAll('.vw');
-  function show(v){
-    var sec=document.getElementById(v);
-    document.querySelectorAll('.view').forEach(function(s){s.classList.toggle('on',s.id===v)});
-    vbtns.forEach(function(b){b.setAttribute('aria-pressed',b.dataset.view===v?'true':'false')});
-    ['prev','next','today'].forEach(function(k){var a=document.getElementById('nav-'+k);if(a&&sec.dataset[k]){a.href=sec.dataset[k]}});
+  var cur='month',curWeek=null;
+  function weekEl(mon){return week.querySelector('.wk[data-week="'+mon+'"]')}
+  function showMonth(){
+    cur='month';
+    month.classList.add('on');week.classList.remove('on');
+    range.textContent=month.dataset.label;
+    prev.href=month.dataset.prev;next.href=month.dataset.next;
+    vbtns.forEach(function(b){b.setAttribute('aria-pressed',b.dataset.view==='month'?'true':'false')});
+    window.scrollTo(0,0);
   }
-  vbtns.forEach(function(b){b.addEventListener('click',function(){show(b.dataset.view)})});
-
-  var cells=document.querySelectorAll('.mcell[data-day]');
-  cells.forEach(function(c){c.addEventListener('click',function(){
-    var id='md-'+c.dataset.day;
-    document.querySelectorAll('.mday').forEach(function(d){d.hidden=d.id!==id});
-    cells.forEach(function(o){o.setAttribute('aria-expanded',o===c?'true':'false')});
+  function showWeek(mon,day){
+    var w=weekEl(mon);
+    if(!w){location.href=P.base+'?view=week&anchor='+mon;return}
+    cur='week';curWeek=mon;
+    week.querySelectorAll('.wk').forEach(function(x){x.hidden=x!==w});
+    week.querySelectorAll('.day.sel').forEach(function(d){d.classList.remove('sel')});
+    month.classList.remove('on');week.classList.add('on');
+    range.textContent=w.dataset.label;
+    prev.href=weekEl(w.dataset.prev)?'#':P.base+'?view=week&anchor='+w.dataset.prev;
+    next.href=weekEl(w.dataset.next)?'#':P.base+'?view=week&anchor='+w.dataset.next;
+    vbtns.forEach(function(b){b.setAttribute('aria-pressed',b.dataset.view==='week'?'true':'false')});
+    if(day){var d=document.getElementById('d-'+day);if(d){d.classList.add('sel');var h=document.querySelector('.top');html.style.setProperty('--top',(h?h.offsetHeight:0)+8+'px');setTimeout(function(){d.scrollIntoView({block:'start',behavior:'smooth'})},0)}}
+    else{window.scrollTo(0,0)}
+  }
+  function go(dir){
+    if(cur!=='week')return true;
+    var w=weekEl(curWeek);var to=w&&w.dataset[dir];
+    if(to&&weekEl(to)){showWeek(to);return false}
+    return true;
+  }
+  prev.addEventListener('click',function(e){if(!go('prev'))e.preventDefault()});
+  next.addEventListener('click',function(e){if(!go('next'))e.preventDefault()});
+  today.addEventListener('click',function(e){
+    if(P.todayWeek&&weekEl(P.todayWeek)){e.preventDefault();if(cur==='week'){showWeek(P.todayWeek,P.today)}else{showMonth()}}
+  });
+  vbtns.forEach(function(b){b.addEventListener('click',function(){
+    if(b.dataset.view==='month'){showMonth()}else{showWeek(P.anchorWeek,P.anchor)}
   })});
+  document.getElementById('back').addEventListener('click',showMonth);
+  document.querySelectorAll('.mcell[data-day]').forEach(function(c){c.addEventListener('click',function(){showWeek(c.dataset.week,c.dataset.day)})});
 
   var lb=document.getElementById('lb'),img=lb.querySelector('img'),cap=lb.querySelector('p');
   document.querySelectorAll('.ph').forEach(function(p){p.addEventListener('click',function(){
     img.src=p.dataset.src;cap.textContent=p.dataset.label||'';lb.classList.add('on');
   })});
   lb.addEventListener('click',function(){lb.classList.remove('on');img.src=''});
+
+  // 最初の表示。LINE から来たとき（URL に view が無い）は月。週のリンクで来たときだけ週
+  var q=new URLSearchParams(location.search);
+  if(q.get('view')==='week'){showWeek(P.anchorWeek,P.anchor)}else{showMonth()}
 })();
 `;
 
 // 最初の描画の前に文字の大きさを戻す（ちらつき防止）。失敗しても何もしない
 const HEAD_JS = `try{var f=localStorage.getItem('dandori-fs');if(f==='s'||f==='l'){document.documentElement.setAttribute('data-fs',f)}}catch(e){}`;
 
-/** HTML 1枚（CSS/JS はインライン。外部の読み込みなし）。スマホ優先・大きな字・週は1日ずつ縦、月は升目 */
+/** HTML 1枚（CSS/JS はインライン。外部の読み込みなし）。最初は月の升目、日を押すとその週。字は大きく、ログインなし */
 export function renderCalendar(raw: CalendarInput): string {
   const input = { ...raw, cards: normCards(raw.cards) };
   const family = input.familyName || "わが家";
   const icsUrl = `${input.baseUrl}.ics`;
-  const v = input.view;
-  // 週も月も1枚に入れておき、切り替えは JS で（読み込み直さない）
-  const week = weekHtml(input, v === "week");
-  const month = monthHtml(input, v === "month");
-  const anchorNav = v === "week" ? mondayOf(input.anchor) : firstOfMonth(input.anchor);
-  const prev = v === "week" ? addDays(anchorNav, -7) : addMonths(anchorNav, -1);
-  const next = v === "week" ? addDays(anchorNav, 7) : addMonths(anchorNav, 1);
+  const idx = childIndex(input);
+  const { month, weekSec, first } = monthAndWeeks(input, idx);
+  const monthOn = input.view !== "week";
+  const params = {
+    base: input.baseUrl,
+    today: input.today,
+    todayWeek: mondayOf(input.today),
+    anchor: input.anchor,
+    anchorWeek: mondayOf(input.anchor),
+  };
   return `<!doctype html>
 <html lang="ja">
 <head>
@@ -388,22 +497,33 @@ export function renderCalendar(raw: CalendarInput): string {
 <style>${CSS}</style>
 </head>
 <body>
-<h1>${esc(family)}の予定</h1>
-<nav class="ctl" aria-label="操作">
-  <a class="btn" id="nav-today" href="${navLink(input.baseUrl, v, input.today)}">今日</a>
-  <a class="btn" id="nav-prev" href="${navLink(input.baseUrl, v, prev)}">＜ 前</a>
-  <a class="btn" id="nav-next" href="${navLink(input.baseUrl, v, next)}">次 ＞</a>
-  <span class="grp" role="group" aria-label="表示の切り替え">
-    <button type="button" class="btn vw" data-view="week" aria-pressed="${v === "week"}">週</button>
-    <button type="button" class="btn vw" data-view="month" aria-pressed="${v === "month"}">月</button>
-  </span>
-  <span class="grp" role="group" aria-label="文字の大きさ">
-    <span class="lab" aria-hidden="true">あ</span>
-    <button type="button" class="btn fs" data-fs="s" aria-pressed="false" aria-label="文字を小さく">小</button>
-    <button type="button" class="btn fs" data-fs="m" aria-pressed="true" aria-label="文字をふつうに">中</button>
-    <button type="button" class="btn fs" data-fs="l" aria-pressed="false" aria-label="文字を大きく">大</button>
-  </span>
-</nav>
+<header class="top">
+  <div class="row row1">
+    <h1>${esc(family)}の予定</h1>
+    <span class="grp" role="group" aria-label="文字の大きさ">
+      <span class="lab" aria-hidden="true">あ</span>
+      <button type="button" class="btn fs" data-fs="s" aria-pressed="false" aria-label="文字を小さく">小</button>
+      <button type="button" class="btn fs" data-fs="m" aria-pressed="true" aria-label="文字をふつうに">中</button>
+      <button type="button" class="btn fs" data-fs="l" aria-pressed="false" aria-label="文字を大きく">大</button>
+    </span>
+  </div>
+  <nav class="row row2" aria-label="操作">
+    <a class="btn sm" id="nav-prev" href="${navLink(input.baseUrl, "month", addMonths(first, -1))}" aria-label="前へ">＜</a>
+    <span class="range" id="range">${esc(monthLabel(first))}</span>
+    <a class="btn sm" id="nav-next" href="${navLink(input.baseUrl, "month", addMonths(first, 1))}" aria-label="次へ">＞</a>
+    <a class="btn sm" id="nav-today" href="${navLink(input.baseUrl, "month", input.today)}">今日</a>
+    <span class="grp" role="group" aria-label="表示の切り替え">
+      <button type="button" class="btn sm vw" data-view="month" aria-pressed="${monthOn}">月</button>
+      <button type="button" class="btn sm vw" data-view="week" aria-pressed="${!monthOn}">週</button>
+    </span>
+  </nav>
+  ${legendHtml(idx)}
+</header>
+<main>
+${month}
+${weekSec}
+${undatedHtml(input.cards, idx)}
+${noticesHtml(input.photos)}
 <details class="howto">
   <summary>Googleカレンダーに入れる</summary>
   <ol>
@@ -423,11 +543,9 @@ export function renderCalendar(raw: CalendarInput): string {
     <li>1対1のトークでは、下の「メニュー」から同じことができる</li>
   </ul>
 </details>
-${week}
-${month}
-${undatedHtml(input.cards)}
-${noticesHtml(input.photos)}
+</main>
 <div id="lb" role="dialog" aria-label="写真"><button type="button" class="btn close" aria-label="閉じる">閉じる</button><img alt=""><p></p></div>
+<script>window.__cal=${JSON.stringify(params).replace(/</g, "\\u003c")};</script>
 <script>${JS}</script>
 </body>
 </html>`;

@@ -25,7 +25,7 @@ export default {
           headers: { ...noStore, "Content-Type": "text/calendar; charset=utf-8" },
         });
       }
-      const view = url.searchParams.get("view") === "month" ? "month" : "week";
+      const view = url.searchParams.get("view") === "week" ? "week" : "month";
       const anchor = url.searchParams.get("anchor") ?? undefined;
       return new Response(await family.calendarPage(`${url.origin}/c/${cal[1]}`, view, anchor), {
         headers: { ...noStore, "Content-Type": "text/html; charset=utf-8" },
