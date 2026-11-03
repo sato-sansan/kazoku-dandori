@@ -41,7 +41,7 @@ import {
   slotsFromCards,
   undecidedMessage,
 } from "./pickup";
-import { loadProfile } from "./profile";
+import { loadProfile, type FamilyProfile } from "./profile";
 import { readNotice, type ReadInput } from "./reader";
 import { addDays, jstDate, jstTime, jstToMs, jstWeekday, nextSundayEvening, weekRange } from "./time";
 import { ADULTS, type Adult, type FamilyEvent, type Slot } from "./types";
@@ -353,6 +353,32 @@ export class Family extends DurableObject<Env> {
       await this.send(queued, [{ type: "text", text: `このグループは${sample ? "見本の家族" : "本物の家族"}（${names}）で動きます。` }]);
       return;
     }
+    // 連絡文の札の［📞 電話］を、番号が未登録のときに押した
+    const teach = text.match(/^(保育所|小学校)の電話を教える$/);
+    if (teach) {
+      await this.send(queued, [
+        { type: "text", text: `${teach[1]}の電話番号を、このように送ってください：\n${teach[1]}の電話 0226-00-0000 9:00まで\n（「9:00まで」は、何時までに連絡するか。無くてもOK）` },
+      ]);
+      return;
+    }
+    // 園・学校の電話番号：「保育所の電話 0120-444-444 9:00まで」。休みの連絡に［電話をかける］が付く
+    const phone = text.match(
+      /^(保育所|保育園|幼稚園|こども園|園|小学校|学校)の電話(?:番号)?[\s　]*[:：]?[\s　]*([0-9０-９\-－()（）\s　]+?)(?:[\s　]*([0-9０-９]{1,2}[:：][0-9０-９]{2})[\s　]*まで)?$/,
+    );
+    if (phone) {
+      const place = /小学校|学校/.test(phone[1]) ? "小学校" : "保育所";
+      const digits = phone[2].replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/[^0-9\-]/g, "");
+      if (digits.replace(/-/g, "").length < 10) {
+        await this.send(queued, [{ type: "text", text: "番号が短いようです。「保育所の電話 0226-00-0000 9:00まで」のように送ってください。" }]);
+        return;
+      }
+      const by = phone[3]?.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace("：", ":");
+      this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", `contact.${place}`, JSON.stringify({ phone: digits, by }));
+      await this.send(queued, [
+        { type: "text", text: `${place}の電話を覚えました：${digits}${by ? `（${by}までに）` : ""}。休みの連絡に［電話をかける］が付きます。` },
+      ]);
+      return;
+    }
     // ホーム画面を作り直す（画像や入口を変えたとき）
     if (/^リッチメニュー[\s　]*(作り直し|作り直して|つくりなおし)$/.test(text)) {
       const members = this.sql.exec<{ user_id: string }>("SELECT user_id FROM members").toArray().map((m) => m.user_id);
@@ -391,8 +417,9 @@ export class Family extends DurableObject<Env> {
     }
 
     // 写真：「この写真 残して」／「学芸会のお便り見せて」
-    if (/^(この)?写真[\s　]*(を)?[\s　]*(残して|のこして|とっておいて)$/.test(text)) {
-      await this.keepRecentPhoto(queued);
+    // 「この写真 残して」「この写真 ○○と△△の成長記録にしておいて」。成長記録は子どもの名前つきで家のページに並ぶ
+    if (/成長記録|^(この)?(写真|これ)[\s　]*(を)?.*(残して|のこして|とっておいて|記録して|記録しておいて)$/.test(text)) {
+      await this.keepRecentPhoto(queued, text);
       return;
     }
     const show = /^(.+?)の(お便り|おたより|写真|プリント)[\s　]*(見せて|みせて|出して|だして)$/.exec(text);
@@ -599,7 +626,7 @@ export class Family extends DurableObject<Env> {
     image: { mediaType: string; data: string },
     date: string,
     label: string,
-    kind: "お便り" | "家族",
+    kind: "お便り" | "家族" | "成長",
   ) {
     const ext = image.mediaType.split("/")[1] ?? "jpg";
     const key = `${familyId}/${date}/${messageId}.${ext}`;
@@ -632,12 +659,18 @@ export class Family extends DurableObject<Env> {
   }
 
   /** 「この写真 残して」：直前（10分以内）の写真を家族の写真として残す */
-  private async keepRecentPhoto(queued: QueuedEvent) {
+  private async keepRecentPhoto(queued: QueuedEvent, text: string) {
+    // 文に出てくる子どもの呼び名で「だれの成長記録か」を決める。名前が無ければ家族の写真
+    const names = this.profile().children.map((c) => c.name).filter((n) => text.includes(n));
+    const growth = names.length > 0 || /成長記録/.test(text);
+    const label = names.length > 0 ? names.join("・") : growth ? "成長記録" : "家族の写真";
     const recent = this.sql
       .exec("SELECT message_id FROM recent_images ORDER BY received_at DESC LIMIT 1")
       .toArray()[0];
     if (!recent) {
-      await this.send(queued, [{ type: "text", text: "残す写真が見つかりません。写真を送ってから「この写真 残して」と言ってください。" }]);
+      await this.send(queued, [
+        { type: "text", text: `残す写真が見つかりません。写真を送ってから「この写真 ${names[0] ?? "○○"}の成長記録に」と言ってください。` },
+      ]);
       return;
     }
     const messageId = recent.message_id as string;
@@ -650,8 +683,15 @@ export class Family extends DurableObject<Env> {
       await this.send(queued, [{ type: "text", text: "写真を取り出せませんでした。もう一度送ってから言ってください。" }]);
       return;
     }
-    await this.savePhoto(queued.familyId, messageId, image, jstDate(), "家族の写真", "家族");
-    await this.send(queued, [{ type: "text", text: "残しました。カレンダーの今日の日付から見られます。" }]);
+    await this.savePhoto(queued.familyId, messageId, image, jstDate(), label, growth ? "成長" : "家族");
+    await this.send(queued, [
+      {
+        type: "text",
+        text: growth
+          ? `成長記録に残しました（${label}）。家のページの「成長記録」に並びます。`
+          : "残しました。家のページの「成長記録」と今日の日付から見られます。",
+      },
+    ]);
   }
 
   /** 「学芸会のお便り見せて」：題名で探して LINE に再送 */
@@ -797,6 +837,17 @@ export class Family extends DurableObject<Env> {
     const first = events[0]?.at ?? Date.now();
     const weekIndex = Math.floor((start - weekRange(first).start) / (7 * 86_400_000)) + 1;
     return computeAdventure(events, start, end, weekIndex);
+  }
+
+  /** 家のページの「わが家の冒険」：今週の数字と、今週だれが何回引き受けたか（順位は付けない） */
+  private adventureForPage() {
+    const { start, end } = weekRange();
+    const events = this.sql.exec<EventRow>("SELECT * FROM events ORDER BY at").toArray().map(toFamilyEvent);
+    const takes = new Map<string, number>();
+    for (const e of events) {
+      if (e.at >= start && e.at < end && (e.kind === "引受" || e.kind === "急な引受")) takes.set(e.who, (takes.get(e.who) ?? 0) + 1);
+    }
+    return { stats: this.stats(), takes: [...takes].map(([who, count]) => ({ who, count })) };
   }
 
   private async sendWeeklyCard() {
@@ -1003,9 +1054,10 @@ export class Family extends DurableObject<Env> {
       cards: this.okCards(),
       slots: this.allSlots(),
       photos: this.sql
-        .exec<{ id: number; date: string; label: string }>("SELECT id, date, label FROM photos ORDER BY date")
+        .exec<{ id: number; date: string; label: string; kind: string }>("SELECT id, date, label, kind FROM photos ORDER BY date")
         .toArray()
-        .map((row) => ({ date: row.date, label: row.label, url: `${baseUrl}/photo/${row.id}` })),
+        .map((row) => ({ date: row.date, label: row.label, kind: row.kind, url: `${baseUrl}/photo/${row.id}` })),
+      adventure: this.adventureForPage(),
       baseUrl,
     });
   }
@@ -1021,9 +1073,16 @@ export class Family extends DurableObject<Env> {
   // ── 小さな道具 ───────────────────────────────────────────
 
   /** 家族の呼び名と学年。撮影用のグループで「架空の家族で」と言うと、見本の4人（はると・ゆい・そうた・めい）になる */
-  private profile() {
+  private profile(): FamilyProfile {
     const row = this.sql.exec("SELECT value FROM settings WHERE key = 'profile'").toArray()[0];
-    return loadProfile(row?.value === "sample" ? undefined : this.env.FAMILY_PROFILE);
+    const base = loadProfile(row?.value === "sample" ? undefined : this.env.FAMILY_PROFILE);
+    // 園・学校の電話は LINE で「保育所の電話 0120-…  9:00まで」と教えてもらい、家族ごとの箱に置く（secret を触らずに済む）
+    const contacts = { ...base.contacts };
+    for (const r of this.sql.exec<{ key: string; value: string }>("SELECT key, value FROM settings WHERE key LIKE 'contact.%'").toArray()) {
+      const place = r.key.slice("contact.".length);
+      if (place === "保育所" || place === "小学校") contacts[place] = JSON.parse(r.value);
+    }
+    return { ...base, contacts };
   }
 
   private roleOf(userId?: string): Adult | null {

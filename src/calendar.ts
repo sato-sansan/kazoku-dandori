@@ -2,6 +2,7 @@
 // ばあばがスマホで見る前提：390px で横スクロールなし、字は「あ 小中大」で 17/18/22px、ボタンは 44px 以上
 // 最初は月の升目（1画面で月全体。子どもごとの色の頭文字と、送迎の？で一目）。日を押すとその週を1日ずつ縦に（768px 以上で7列）
 
+import type { AdventureStats } from "./adventure";
 import type { Card } from "./card";
 import type { Slot } from "./types";
 import { addDays, jstToMs, jstWeekday } from "./time";
@@ -12,7 +13,8 @@ export interface CalendarInput {
   anchor: string; // 表示の基準日 YYYY-MM-DD
   cards: Card[]; // 予定カード（date が null のものは「日付未定」の欄にまとめる）
   slots: Slot[]; // 送迎の枠
-  photos: { date: string; url: string; label: string }[]; // その日の写真（お便りの写真など）。url は期限つき
+  photos: { date: string; url: string; label: string; kind?: string }[]; // その日の写真。kind は お便り／家族／成長。url は期限つき
+  adventure?: { stats: AdventureStats; takes: { who: string; count: number }[] }; // 家族の冒険（レベル・今週のありがとう・だれが何回）
   baseUrl: string; // "https://.../cal/<token>" ページ自身の URL（週↔月の切り替えリンクに使う）
   familyName?: string; // 「さとう家」など。無ければ「わが家」
 }
@@ -180,7 +182,8 @@ function photoThumb(p: Photo) {
 }
 
 /** 残してある写真を、新しい順に一覧で。「あのお便り、どこだっけ」のための置き場 */
-function noticesHtml(photos: Photo[]) {
+function noticesHtml(all: Photo[]) {
+  const photos = all.filter((p) => !p.kind || p.kind === "お便り");
   if (photos.length === 0) return "";
   const sorted = [...photos].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   return `<section class="notices" aria-labelledby="nt-h">
@@ -188,6 +191,52 @@ function noticesHtml(photos: Photo[]) {
 <div class="thumbs">${sorted
     .map((p) => `<figure class="nt">${photoThumb(p)}<figcaption>${esc(shortDate(p.date))} ${esc(p.label)}</figcaption></figure>`)
     .join("")}</div>
+</section>`;
+}
+
+/** 成長記録：「この写真 ○○の成長記録に」と言った写真を、子どもの名前つきで新しい順に。家族の写真もここ */
+function growthHtml(all: Photo[], idx: Map<string, number>) {
+  const photos = all.filter((p) => p.kind === "成長" || p.kind === "家族");
+  const sorted = [...photos].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  const items =
+    sorted.length === 0
+      ? `<p class="none">まだありません。家族の LINE で写真を送ってから「この写真 ○○の成長記録に」と言うと、ここに並びます。</p>`
+      : `<div class="thumbs">${sorted
+          .map((p) => {
+            const names = p.label.split("・").filter((n) => idx.has(n));
+            const chips = names.map((n) => `<i class="ci" ${childStyle(idx, n)}>${esc(n.slice(0, 1))}</i>`).join("");
+            return `<figure class="nt gr">${photoThumb(p)}<figcaption>${chips}${esc(shortDate(p.date))} ${esc(p.label)}</figcaption></figure>`;
+          })
+          .join("")}</div>`;
+  return `<section class="notices growth" aria-labelledby="gr-h">
+<h2 id="gr-h">🌱 成長記録${sorted.length > 0 ? `（${sorted.length}枚）` : ""}</h2>
+${items}
+</section>`;
+}
+
+/** わが家の冒険：家族レベル・次のレベルまで・今週のありがとう・つづき・称号・今週だれが何回。順位は付けない */
+function adventureHtml(adv: CalendarInput["adventure"]) {
+  if (!adv) return "";
+  const s = adv.stats;
+  const total = s.xp + s.nextLevelXp;
+  const pct = total > 0 ? Math.min(100, Math.round((s.xp / total) * 100)) : 100;
+  const delta = s.thanksDelta > 0 ? `（先週より +${s.thanksDelta}）` : s.thanksDelta < 0 ? `（先週より ${s.thanksDelta}）` : "";
+  const takes = adv.takes.length > 0 ? adv.takes.map((t) => `<span class="chip sv">${esc(t.who)} ${t.count}回</span>`).join("") : `<span class="none">まだ引き受けなし</span>`;
+  const titles = s.titles.length > 0 ? s.titles.map((t) => `<span class="chip ttl">${esc(t.who)}：${esc(t.title)}${t.isNew ? " 🆕" : ""}</span>`).join("") : "";
+  const streaks = s.streaks.filter((st) => st.days > 0).map((st) => `<span class="chip">${esc(st.name)} ${st.days}日</span>`).join("");
+  return `<section class="adv" aria-labelledby="adv-h">
+<h2 id="adv-h">🏆 わが家の冒険 <small>${esc(s.weekLabel)}</small></h2>
+<p class="lv"><b>レベル${s.level}</b> ${esc(s.levelName)}</p>
+<div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
+<p class="xp">${s.xp} XP${s.nextLevelXp > 0 ? `　次のレベルまで あと ${s.nextLevelXp}` : "　最高レベル！"}</p>
+<dl class="advs">
+<dt>今週のありがとう</dt><dd><b>${s.thanks}</b> 回 ${esc(delta)}</dd>
+<dt>今週の引き受け</dt><dd>${takes}</dd>
+${streaks ? `<dt>つづき</dt><dd>${streaks}</dd>` : ""}
+${titles ? `<dt>称号</dt><dd>${titles}</dd>` : ""}
+${s.finePlay ? `<dt>ファインプレー</dt><dd>${esc(s.finePlay.who)}：${esc(s.finePlay.note)}</dd>` : ""}
+</dl>
+<p class="hint">引き受け 10 XP・急な引き受け 20 XP・ありがとう 2＋5 XP・連絡文 5 XP。日曜 20:00 に LINE へ今週のカード</p>
 </section>`;
 }
 
@@ -345,6 +394,18 @@ main{padding:10px 12px 24px}
 .pk.nd{background:var(--nd);color:#fff}
 .pk.ok{background:var(--sv-bg);color:var(--sv)}
 .more{font-size:.7rem;color:var(--sub)}
+/* わが家の冒険 */
+.adv{margin:14px 0 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.adv h2{margin:0 0 6px;font-size:1.1rem}.adv h2 small{font-weight:normal;color:var(--sub);font-size:.85rem}
+.adv .lv{margin:0;font-size:1.15rem}.adv .lv b{margin-right:6px}
+.adv .bar{height:14px;border-radius:999px;background:var(--bg2,#EFE8DC);overflow:hidden;margin:6px 0 2px}
+.adv .bar span{display:block;height:100%;background:linear-gradient(90deg,#F2B544,#E0503F);border-radius:999px}
+.adv .xp{margin:0 0 8px;color:var(--sub);font-size:.9rem}
+.advs{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0;align-items:baseline}
+.advs dt{color:var(--sub);font-size:.9rem;white-space:nowrap}.advs dd{margin:0;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.chip{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--bg2,#EFE8DC);font-size:.9rem}
+.chip.sv{background:var(--sv-bg);color:var(--sv)}.chip.ttl{background:#FFF1C2}
+.growth .nt figcaption .ci{margin-right:3px}
 /* 週：1日ずつ縦（768px 以上は7列） */
 .back{margin:0 0 10px}
 .wk{display:flex;flex-direction:column;gap:10px}
@@ -523,6 +584,8 @@ export function renderCalendar(raw: CalendarInput): string {
 ${month}
 ${weekSec}
 ${undatedHtml(input.cards, idx)}
+${adventureHtml(input.adventure)}
+${growthHtml(input.photos, idx)}
 ${noticesHtml(input.photos)}
 <details class="howto">
   <summary>Googleカレンダーに入れる</summary>

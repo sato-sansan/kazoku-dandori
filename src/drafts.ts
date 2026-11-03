@@ -175,7 +175,7 @@ export function absenceMessages(draft: AbsenceDraft, contacts?: FamilyProfile["c
       `欠席理由：${draft.nursery.reason}`,
       draft.nursery.note && `連絡欄：${draft.nursery.note}`,
     ];
-    messages.push(bubble("保育所アプリ", lines, draft.nursery.note, contacts?.["保育所"]));
+    messages.push(bubble("保育所", lines, draft.nursery.note, contacts?.["保育所"]));
   }
   if (draft.school) {
     const lines = [
@@ -184,7 +184,7 @@ export function absenceMessages(draft: AbsenceDraft, contacts?: FamilyProfile["c
       `理由：${draft.school.reason}`,
       draft.school.note && `備考：${draft.school.note}`,
     ];
-    messages.push(bubble("小学校アプリ", lines, draft.school.note, contacts?.["小学校"]));
+    messages.push(bubble("小学校", lines, draft.school.note, contacts?.["小学校"]));
   }
   if (draft.lesson) {
     messages.push(bubble("習い事", [draft.lesson], draft.lesson));
@@ -222,14 +222,23 @@ function bubble(
       flex: 1,
       action: { type: "clipboard", label: "コピー", clipboardText: copy },
     },
-    tel && {
-      type: "button",
-      style: "primary",
-      height: "sm",
-      flex: 1,
-      color: "#2e8b57",
-      action: { type: "uri", label: "📞 電話をかける", uri: `tel:${tel}` },
-    },
+    // 番号が無いときの［📞 電話］は、番号の教え方を返す（押して何も起きないボタンにしない）
+    tel
+      ? {
+          type: "button",
+          style: "primary",
+          height: "sm",
+          flex: 1,
+          color: "#2e8b57",
+          action: { type: "uri", label: "📞 電話をかける", uri: `tel:${tel}` },
+        }
+      : {
+          type: "button",
+          style: "secondary",
+          height: "sm",
+          flex: 1,
+          action: { type: "message", label: "📞 電話", text: `${to}の電話を教える` },
+        },
   ].filter(Boolean);
   return {
     type: "flex",
@@ -239,7 +248,7 @@ function bubble(
       header: {
         type: "box",
         layout: "vertical",
-        contents: [{ type: "text", text: to, weight: "bold", size: "lg", color: "#1f6f8b" }],
+        contents: [{ type: "text", text: `${to} アプリ／電話`, weight: "bold", size: "lg", color: "#1f6f8b" }],
       },
       body: {
         type: "box",
