@@ -13,9 +13,31 @@ export interface LineEvent {
   source: { type: "user" | "group" | "room"; userId?: string; groupId?: string; roomId?: string };
   message?: { id: string; type: string; text?: string };
   unsend?: { messageId: string };
+  /** memberJoined：グループに入った人たち */
+  joined?: { members: { type: string; userId?: string }[] };
 }
 
-export type OutMessage = TextMessage | FlexMessage | ImageMessage;
+export type OutMessage = TextMessage | TextV2Message | FlexMessage | ImageMessage;
+
+/** @で名指しする文。本文の {u1} {u2} … が相手の名前に置き換わる */
+export interface TextV2Message {
+  type: "textV2";
+  text: string;
+  substitution: Record<string, { type: "mention"; mentionee: { type: "user"; userId: string } }>;
+  quickReply?: { items: QuickReplyItem[] };
+}
+
+/** 「@ばあば さん、…」。名指しする人が複数なら「@A さん @B さん、…」 */
+export function mentionText(userIds: string[], rest: string, buttons: QuickButton[] = []): TextV2Message {
+  const substitution: TextV2Message["substitution"] = {};
+  const heads = userIds.map((userId, i) => {
+    substitution[`u${i + 1}`] = { type: "mention", mentionee: { type: "user", userId } };
+    return `{u${i + 1}} さん`;
+  });
+  const message: TextV2Message = { type: "textV2", text: `${heads.join(" ")}、${rest}`, substitution };
+  if (buttons.length > 0) message.quickReply = withButtons("", buttons).quickReply;
+  return message;
+}
 
 /** 残してある写真を再送するとき。URL は https で、LINE 側が取りに来る */
 export interface ImageMessage {
@@ -106,6 +128,50 @@ export async function reply(token: string, replyToken: string, messages: OutMess
 export async function push(token: string, to: string, messages: OutMessage[]) {
   const res = await post("push", token, { to, messages });
   if (!res.ok) throw new Error(`line push failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+}
+
+// ── リッチメニュー（1対1のトークの下に出る4つの入口。家族ごとに1つ作り、名簿の人に結びつける） ──
+
+const RICHMENU_API = "https://api.line.me/v2/bot/richmenu";
+
+export interface RichMenuArea {
+  bounds: { x: number; y: number; width: number; height: number };
+  action: { type: "uri"; label: string; uri: string } | { type: "message"; label: string; text: string };
+}
+
+/** 作って ID を返す。画像はこのあと uploadRichMenuImage で入れる */
+export async function createRichMenu(token: string, name: string, areas: RichMenuArea[]) {
+  const res = await fetch(RICHMENU_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ size: { width: 2500, height: 843 }, selected: true, name, chatBarText: "メニュー", areas }),
+  });
+  if (!res.ok) throw new Error(`richmenu create failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  return ((await res.json()) as { richMenuId: string }).richMenuId;
+}
+
+export async function uploadRichMenuImage(token: string, richMenuId: string, png: ArrayBuffer) {
+  const res = await fetch(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, {
+    method: "POST",
+    headers: { "Content-Type": "image/png", Authorization: `Bearer ${token}` },
+    body: png,
+  });
+  if (!res.ok) throw new Error(`richmenu image failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+}
+
+/** 名簿の人たちに結びつける（1対1のトークにだけ出る） */
+export async function linkRichMenu(token: string, richMenuId: string, userIds: string[]) {
+  if (userIds.length === 0) return;
+  const res = await fetch(`${RICHMENU_API}/bulk/link`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ richMenuId, userIds: userIds.slice(0, 500) }),
+  });
+  if (!res.ok) throw new Error(`richmenu link failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+}
+
+export async function deleteRichMenu(token: string, richMenuId: string) {
+  await fetch(`${RICHMENU_API}/${richMenuId}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
 }
 
 /** 画像を保存せずメモリにだけ取り出す。送信取消などで取れないときは null */

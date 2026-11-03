@@ -137,6 +137,18 @@ function photoThumb(p: Photo) {
   return `<button type="button" class="ph" data-src="${esc(p.url)}" data-label="${esc(p.label)}" aria-label="写真を大きく見る：${esc(p.label)}"><img src="${esc(p.url)}" alt="${esc(p.label)}" loading="lazy"></button>`;
 }
 
+/** 残してある写真を、新しい順に一覧で。「あのお便り、どこだっけ」のための置き場 */
+function noticesHtml(photos: Photo[]) {
+  if (photos.length === 0) return "";
+  const sorted = [...photos].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return `<section class="notices" aria-labelledby="nt-h">
+<h2 id="nt-h">お便りの写真（${sorted.length}枚）</h2>
+<div class="thumbs">${sorted
+    .map((p) => `<figure class="nt">${photoThumb(p)}<figcaption>${esc(shortDate(p.date))} ${esc(p.label)}</figcaption></figure>`)
+    .join("")}</div>
+</section>`;
+}
+
 function navLink(baseUrl: string, view: CalendarInput["view"], anchor: string) {
   return esc(`${baseUrl}?view=${view}&anchor=${anchor}`);
 }
@@ -260,6 +272,12 @@ button{font:inherit;color:inherit}
 .ev .t{color:var(--ev);font-weight:bold}
 .ev small{display:block;font-size:1em;color:var(--sub)}
 .thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.notices{margin-top:20px;padding-top:12px;border-top:2px solid #ddd}
+.notices h2{font-size:1.1em;margin:0 0 8px}
+.nt{margin:0;width:calc(50% - 3px)}
+.nt .ph{width:100%}
+.nt img{width:100%;height:auto}
+.nt figcaption{font-size:.9em;color:#333}
 /* 月：升目 */
 .mgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:1px solid var(--line);border-left:1px solid var(--line);background:#fff}
 .mgrid>*{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:3px 2px}
@@ -395,9 +413,20 @@ export function renderCalendar(raw: CalendarInput): string {
   <code>${esc(icsUrl)}</code>
   <p>この予定ページの URL は家族だけに。合言葉の代わりなので、ほかの人に送らないでください。</p>
 </details>
+<details class="howto">
+  <summary>だんどりさんの使い方（LINE で）</summary>
+  <ul>
+    <li>📷 お便りの写真を送る → 予定にして、ここに残る（紙は捨ててOK）</li>
+    <li>🚗 「お迎えを頼む」→ 日と時刻を選ぶ → 家族の名前ボタンで決まる</li>
+    <li>🤒 「休みの連絡」→ 子と理由を選ぶ → 園・学校・習い事への文を［コピー］</li>
+    <li>🙏 引き受けた人に［ありがとう］→ 日曜の夜に今週のカード</li>
+    <li>1対1のトークでは、下の「メニュー」から同じことができる</li>
+  </ul>
+</details>
 ${week}
 ${month}
 ${undatedHtml(input.cards)}
+${noticesHtml(input.photos)}
 <div id="lb" role="dialog" aria-label="写真"><button type="button" class="btn close" aria-label="閉じる">閉じる</button><img alt=""><p></p></div>
 <script>${JS}</script>
 </body>

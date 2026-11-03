@@ -15,5 +15,7 @@
   ],
   // お便りの写真と「残して」と言われた写真。家族ごとのフォルダ。外から直接は開けない
   "r2_buckets": [{ "binding": "PHOTOS", "bucket_name": "kazoku-dandori-photos" }],
+  // リッチメニューの画像（docs/assets/richmenu.png）を Worker に同梱して LINE に上げる
+  "rules": [{ "type": "Data", "globs": ["**/*.png"], "fallthrough": true }],
   "observability": { "enabled": true }
 }

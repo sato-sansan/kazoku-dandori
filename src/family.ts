@@ -11,7 +11,22 @@ import { renderCalendar, renderIcs } from "./calendar";
 import { firstQuestion, type Card, type CardSource } from "./card";
 import { absenceMessages, draftAbsence, looksLikeAbsence } from "./drafts";
 import type { Env } from "./env";
-import { fetchImage, push, reply, withButtons, type LineEvent, type OutMessage, type QuickButton } from "./line";
+import {
+  createRichMenu,
+  deleteRichMenu,
+  fetchImage,
+  linkRichMenu,
+  mentionText,
+  push,
+  reply,
+  uploadRichMenuImage,
+  withButtons,
+  type LineEvent,
+  type OutMessage,
+  type QuickButton,
+  type RichMenuArea,
+} from "./line";
+import richMenuPng from "../docs/assets/richmenu.png";
 import {
   alreadyDecidedMessage,
   askMessage,
@@ -42,6 +57,10 @@ const GREETING = `だんどりさんです。家族の段取りを手伝いま�
 お便りの写真や「熱で休み」の一言を読んで、予定と連絡文にします。外へは勝手に送りません。
 まず、あなたはだれですか？（下のボタン）`;
 
+/** あとから入った人への投げかけ（先頭に @名前 が付く） */
+const JOINED_TEXT = `だんどりさんです。家族の段取りを手伝います。
+まず、あなたはだれですか？（下のボタンを押してください）`;
+
 const WHO_BUTTONS = ADULTS.map((name) => ({ label: name, text: `わたしは ${name}` }));
 
 /** 何をしたらいいか迷わないための入口。カメラはその場で開く */
@@ -58,8 +77,9 @@ const HOW_TO = `できること
 📷 お便りの写真を送る → 予定にします（写真は残るので紙は捨ててOK）
 🤒「そうた 熱37.8 休み」→ 園・学校への連絡文
 🚗「明日17時のお迎え頼んでおいて」→ 代わりに聞きます
-📅「予定 見せて」→ 週・月のカレンダー
-🙏 引き受けた人に［ありがとう］`;
+📅「予定 見せて」→ 週・月のカレンダー（お便りの写真もここ）
+🙏 引き受けた人に［ありがとう］
+1対1のトークでは、下の「メニュー」から同じことができます`;
 
 interface QueuedEvent {
   familyId: string;
@@ -208,9 +228,17 @@ export class Family extends DurableObject<Env> {
     const { event } = queued;
     const isPrivate = event.source.type === "user";
 
-    if (event.type === "join" || event.type === "memberJoined") {
-      // だんどりさんが入ったとき、あとから家族が入ったとき、どちらも最初の投げかけ
+    if (event.type === "join") {
+      // だんどりさんが入ったとき：最初の投げかけ
       await this.send(queued, [withButtons(GREETING, WHO_BUTTONS)]);
+    } else if (event.type === "memberJoined") {
+      // あとから家族が入ったとき：その人を @ で名指しして名乗ってもらう。名指しが通らなければ普通の文で
+      const ids = (event.joined?.members ?? []).map((m) => m.userId).filter((id): id is string => !!id);
+      try {
+        await this.send(queued, [ids.length > 0 ? mentionText(ids, JOINED_TEXT, WHO_BUTTONS) : withButtons(GREETING, WHO_BUTTONS)]);
+      } catch {
+        await this.pushToGroup([withButtons(GREETING, WHO_BUTTONS)]);
+      }
     } else if (event.type === "unsend" && event.unsend) {
       this.sql.exec(
         "UPDATE batches SET cards = '[]', status = 'removed', awaiting = NULL WHERE message_id = ?",
@@ -219,7 +247,8 @@ export class Family extends DurableObject<Env> {
       // 送信取消なら、残していた写真も消す
       await this.deletePhotosOf(event.unsend.messageId);
     } else if (event.type === "message" && event.message?.type === "image") {
-      if (isPrivate) return;
+      // 1対1の写真は、名簿にいる大人からだけ読む
+      if (isPrivate && !this.roleOf(event.source.userId)) return;
       const image = await fetchImage(this.env.LINE_CHANNEL_ACCESS_TOKEN, event.message.id);
       if (!image) return;
       // 「この写真 残して」が続くかもしれないので、しばらく覚えておく（中身は持たない）
@@ -230,48 +259,53 @@ export class Family extends DurableObject<Env> {
       if (saved) await this.savePhoto(queued.familyId, event.message.id, image, saved.date, saved.label, "お便り");
     } else if (event.type === "message" && event.message?.type === "text") {
       const text = (event.message.text ?? "").trim();
-      if (isPrivate) await this.handlePrivate(queued, text);
-      else await this.handleGroupText(queued, text);
+      // 1対1は名簿にいる大人だけ。中身の扱いはグループと同じで、家族に聞くことだけグループへ流す
+      if (isPrivate && !this.roleOf(event.source.userId)) {
+        await this.send(queued, [{ type: "text", text: "家族のグループで、まず「わたしは ○○」を送ってください。" }]);
+        return;
+      }
+      await this.handleText(queued, text);
     }
   }
 
-  /** 1対1：名簿にいる大人だけ。「明日17時のお迎え頼んでおいて」をグループで代わりに聞く */
-  private async handlePrivate(queued: QueuedEvent, text: string) {
-    const role = this.roleOf(queued.event.source.userId);
-    if (!role) {
-      await this.send(queued, [{ type: "text", text: "家族のグループで、まず「わたしは ○○」を送ってください。" }]);
-      return;
-    }
+  /** 1対1の自由な文：「明日17時のお迎え頼んでおいて」をグループで代わりに聞く。頼みとして読めなければ false */
+  private async privateRequest(queued: QueuedEvent, text: string, role: Adult): Promise<boolean> {
     const today = jstDate();
     const request = parseRequest(text, today);
+    if (!request) return false;
     // 1対1でも「今すぐ」なら今日の今の時刻
-    if (request && /今すぐ|今から|至急|すぐ/.test(text)) {
+    if (/今すぐ|今から|至急|すぐ/.test(text)) {
       request.date = today;
       request.time = jstTime();
-    }
-    if (!request) {
-      await this.send(queued, [
-        { type: "text", text: "分かりませんでした。例：「明日17時のお迎え頼んでおいて」" },
-      ]);
-      return;
     }
     const slot = this.findOrCreateSlot(request.date, request.time, request.kind, "1対1");
     if (slot.status === "決定") {
       await this.send(queued, [{ type: "text", text: `${describeSlot(slot, today)}は、もう${slot.who}に決まっています。` }]);
-      return;
+      return true;
     }
     if (slot.status === "お願い中") {
       await this.send(queued, [{ type: "text", text: `${describeSlot(slot, today)}は、もうグループで聞いています。` }]);
-      return;
+      return true;
     }
     this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = '1対1' WHERE id = ?", slot.id);
     // 頼んだ人の名前は出さず、頼んだ人のボタンも出さない
-    await this.pushToGroup([askMessage({ ...slot, status: "お願い中" }, { exclude: role })]);
+    await this.askGroup(queued, [askMessage({ ...slot, status: "お願い中" }, { exclude: role })]);
+    return true;
+  }
+
+  /** 家族に聞く文。グループで言われたならそのまま返事、1対1ならグループへ流して本人には「聞きました」 */
+  private async askGroup(queued: QueuedEvent, messages: OutMessage[]) {
+    if (queued.event.source.type !== "user") {
+      await this.send(queued, messages);
+      return;
+    }
+    await this.pushToGroup(messages);
     await this.send(queued, [{ type: "text", text: "グループで聞きました。グループを見ていてください。" }]);
   }
 
-  private async handleGroupText(queued: QueuedEvent, text: string) {
+  private async handleText(queued: QueuedEvent, text: string) {
     const userId = queued.event.source.userId;
+    const isPrivate = queued.event.source.type === "user";
     const today = jstDate();
 
     // 「わたしは ばあば」→ 名簿に登録。1対1の道が開く
@@ -286,12 +320,49 @@ export class Family extends DurableObject<Env> {
       );
       await this.env.DIRECTORY.get(this.env.DIRECTORY.idFromName("directory")).register(userId, queued.familyId);
       await this.send(queued, [withButtons(`${role}、よろしくね。${MENU_TEXT}`, MENU_BUTTONS)]);
+      // 1対1のトークにホーム画面（リッチメニュー）を出す。できなくても名乗りは成立
+      try {
+        await this.giveRichMenu(queued.familyId, [userId]);
+      } catch (error) {
+        console.error("richmenu failed", error instanceof Error ? error.message : "");
+      }
       return;
     }
 
     // 入口のメニューと使い方
     if (/^(メニュー|めにゅー|使い方|つかいかた|ヘルプ|help)$/i.test(text)) {
       await this.send(queued, [withButtons(/使い方|つかいかた|ヘルプ|help/i.test(text) ? HOW_TO : MENU_TEXT, MENU_BUTTONS)]);
+      return;
+    }
+    // リッチメニューの「お便りを送る」→ カメラを開くボタン
+    if (/^お便りを送る$/.test(text)) {
+      await this.send(queued, [
+        withButtons("お便りの写真を送ってください。撮ったら、紙は捨ててOKです。", [
+          { type: "camera", label: "📷 撮る" },
+          { type: "cameraRoll", label: "🖼 写真を選ぶ" },
+        ]),
+      ]);
+      return;
+    }
+    // 撮影用のグループ：本物の呼び名を出さず、見本の4人で動かす
+    if (/^(架空の家族で|本物の家族で)$/.test(text)) {
+      const sample = text === "架空の家族で";
+      if (sample) this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('profile', 'sample')");
+      else this.sql.exec("DELETE FROM settings WHERE key = 'profile'");
+      const names = this.profile().children.map((c) => c.name).join("・");
+      await this.send(queued, [{ type: "text", text: `このグループは${sample ? "見本の家族" : "本物の家族"}（${names}）で動きます。` }]);
+      return;
+    }
+    // ホーム画面を作り直す（画像や入口を変えたとき）
+    if (/^リッチメニュー[\s　]*(作り直し|作り直して|つくりなおし)$/.test(text)) {
+      const members = this.sql.exec<{ user_id: string }>("SELECT user_id FROM members").toArray().map((m) => m.user_id);
+      try {
+        await this.giveRichMenu(queued.familyId, members, true);
+        await this.send(queued, [{ type: "text", text: `ホーム画面を作り直しました（${members.length}人）。1対1のトークを開くと下に出ます。` }]);
+      } catch (error) {
+        console.error("richmenu failed", error instanceof Error ? error.message : "");
+        await this.send(queued, [{ type: "text", text: "ホーム画面を作れませんでした。あとでもう一度。" }]);
+      }
       return;
     }
 
@@ -388,7 +459,7 @@ export class Family extends DurableObject<Env> {
         return;
       }
       this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = 'グループ' WHERE id = ?", slot.id);
-      await this.send(queued, [
+      await this.askGroup(queued, [
         { type: "text", text: "🚨 急ぎのお迎えです。行ける人はボタンを押してください。" },
         askMessage({ ...slot, status: "お願い中" }, { exclude: role ?? undefined }),
       ]);
@@ -422,7 +493,7 @@ export class Family extends DurableObject<Env> {
       }
       this.sql.exec("UPDATE slots SET who = NULL, status = 'お願い中' WHERE id = ?", slot.id);
       this.sql.exec("INSERT INTO events (at, kind, who, slot_id) VALUES (?, '取消', ?, ?)", Date.now(), role, slot.id);
-      await this.send(queued, [declineMessage(role), askMessage({ ...slot, who: null, status: "お願い中" }, { exclude: role })]);
+      await this.askGroup(queued, [declineMessage(role), askMessage({ ...slot, who: null, status: "お願い中" }, { exclude: role })]);
       return;
     }
 
@@ -430,7 +501,7 @@ export class Family extends DurableObject<Env> {
     if (looksLikeAbsence(text)) {
       const draft = await draftAbsence(this.env.ANTHROPIC_API_KEY, {
         text,
-        profile: loadProfile(this.env.FAMILY_PROFILE),
+        profile: this.profile(),
         today,
       });
       console.log(JSON.stringify({ step: "absence", attends: draft.attends, ask: !!draft.ask }));
@@ -438,7 +509,13 @@ export class Family extends DurableObject<Env> {
       return;
     }
 
-    await this.read(queued, { text }, "ひとこと");
+    // 1対1の自由な文は、まず「頼んでおいて」として読む
+    const role = this.roleOf(userId);
+    if (isPrivate && role && (await this.privateRequest(queued, text, role))) return;
+
+    const saved = await this.read(queued, { text }, "ひとこと");
+    // グループの雑談には黙る。1対1で分からなかったときだけ、入口を出す
+    if (!saved && isPrivate) await this.send(queued, [withButtons("分かりませんでした。下のボタンからどうぞ。", MENU_BUTTONS)]);
   }
 
   // ── 芯A：読んで、聞く ─────────────────────────────────
@@ -458,7 +535,7 @@ export class Family extends DurableObject<Env> {
 
     const result = await readNotice(this.env.ANTHROPIC_API_KEY, {
       ...input,
-      profile: loadProfile(this.env.FAMILY_PROFILE),
+      profile: this.profile(),
       previousCards: awaiting ? (JSON.parse(awaiting.cards) as Card[]) : undefined,
     });
     // 何を読んだかは記録しない。形だけ残す（件数・自信・聞き返しの有無）
@@ -694,7 +771,7 @@ export class Family extends DurableObject<Env> {
 
   /** その日の未定の枠をグループに聞く（19:00 と、翌朝7:00 の2回まで） */
   private async askForDate(date: string, retry: boolean) {
-    const profile = loadProfile(this.env.FAMILY_PROFILE);
+    const profile = this.profile();
     // 土日は保育所の送迎がない。お便り由来の枠（行事・習い事）だけ
     if (!isWeekend(date)) this.upsertSlots(dailySlots(profile, date));
     const cards = this.okCards();
@@ -776,7 +853,7 @@ export class Family extends DurableObject<Env> {
   /** 進行中の会話があれば1歩進めて true。「お迎えを頼む」「休みの連絡」の入口もここ */
   private async continueFlow(queued: QueuedEvent, userId: string, text: string): Promise<boolean> {
     const today = jstDate();
-    const profile = loadProfile(this.env.FAMILY_PROFILE);
+    const profile = this.profile();
     const row = this.sql.exec<{ step: string; data: string }>("SELECT step, data FROM flows WHERE user_id = ?", userId).toArray()[0];
     const data = row ? (JSON.parse(row.data) as Record<string, string>) : {};
     const set = (step: string, patch: Record<string, string>) =>
@@ -844,7 +921,7 @@ export class Family extends DurableObject<Env> {
         return true;
       }
       this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = 'グループ' WHERE id = ?", slot.id);
-      await this.send(queued, [askMessage({ ...slot, time, status: "お願い中" }, { exclude: role ?? undefined })]);
+      await this.askGroup(queued, [askMessage({ ...slot, time, status: "お願い中" }, { exclude: role ?? undefined })]);
       return true;
     }
     if (row.step === "absence.child" && profile.children.some((c) => c.name === text)) {
@@ -891,6 +968,32 @@ export class Family extends DurableObject<Env> {
     return token;
   }
 
+  /** 家族ごとのホーム画面（リッチメニュー）。なければ作って、名簿の人の1対1のトークに結びつける。rebuild なら作り直す */
+  private async giveRichMenu(familyId: string, userIds: string[], rebuild = false) {
+    const token = this.env.LINE_CHANNEL_ACCESS_TOKEN;
+    const row = this.sql.exec("SELECT value FROM settings WHERE key = 'richmenu'").toArray()[0];
+    let id = row ? (row.value as string) : null;
+    if (rebuild && id) {
+      await deleteRichMenu(token, id);
+      this.sql.exec("DELETE FROM settings WHERE key = 'richmenu'");
+      id = null;
+    }
+    if (!id) {
+      const base = `https://kazoku-dandori.dandori.workers.dev/c/${await this.calendarToken(familyId)}`;
+      const w = 625;
+      const area = (i: number, action: RichMenuArea["action"]): RichMenuArea => ({ bounds: { x: i * w, y: 0, width: w, height: 843 }, action });
+      id = await createRichMenu(token, `だんどりさん ${familyId.slice(0, 8)}`, [
+        area(0, { type: "uri", label: "カレンダー", uri: base }),
+        area(1, { type: "message", label: "お迎えを頼む", text: "お迎えを頼む" }),
+        area(2, { type: "message", label: "休みの連絡", text: "休みの連絡" }),
+        area(3, { type: "message", label: "お便りを送る", text: "お便りを送る" }),
+      ]);
+      await uploadRichMenuImage(token, id, richMenuPng);
+      this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('richmenu', ?)", id);
+    }
+    await linkRichMenu(token, id, userIds);
+  }
+
   async calendarPage(baseUrl: string, view: "week" | "month", anchor?: string) {
     const today = jstDate();
     return renderCalendar({
@@ -916,6 +1019,12 @@ export class Family extends DurableObject<Env> {
   }
 
   // ── 小さな道具 ───────────────────────────────────────────
+
+  /** 家族の呼び名と学年。撮影用のグループで「架空の家族で」と言うと、見本の4人（はると・ゆい・そうた・めい）になる */
+  private profile() {
+    const row = this.sql.exec("SELECT value FROM settings WHERE key = 'profile'").toArray()[0];
+    return loadProfile(row?.value === "sample" ? undefined : this.env.FAMILY_PROFILE);
+  }
 
   private roleOf(userId?: string): Adult | null {
     if (!userId) return null;
@@ -973,7 +1082,7 @@ export class Family extends DurableObject<Env> {
       }
       return existing;
     }
-    const profile = loadProfile(this.env.FAMILY_PROFILE);
+    const profile = this.profile();
     const children = profile.children.filter((c) => c.attends === "保育所").map((c) => c.name);
     this.upsertSlots([{ date, time, kind, place: "保育所", children, who: null, status: "未定", requestedBy }]);
     return this.slotsOf([date]).find((s) => s.kind === kind && s.time === time)!;
