@@ -138,6 +138,18 @@ export class Family extends DurableObject<Env> {
       profile: loadProfile(this.env.FAMILY_PROFILE),
       previousCards: awaiting ? (JSON.parse(awaiting.cards) as Card[]) : undefined,
     });
+    // 何を読んだかは記録しない。形だけ残す（件数・自信・聞き返しの有無）
+    console.log(
+      JSON.stringify({
+        step: "read",
+        source,
+        is_notice: result.is_notice,
+        cards: result.cards.length,
+        low: result.cards.filter((card) => card.confidence === "低").length,
+        ask: result.cards.some((card) => card.ask),
+        summary_lines: result.summary.length,
+      }),
+    );
     // 雑談には黙っている
     if (!result.is_notice || result.cards.length === 0) return;
 
@@ -157,7 +169,10 @@ export class Family extends DurableObject<Env> {
       )
       .one();
 
-    const summary = result.summary.join("\n");
+    // 要約が空だと LINE が受け付けない。カードから1行ずつ作って補う
+    const summary =
+      result.summary.join("\n").trim() ||
+      result.cards.map((card) => `${card.child}：${card.title}${card.date ? `（${card.date}）` : ""}`).join("\n");
     await this.send(queued, [
       question
         ? withButtons(`${summary}\n\n${question}`, [

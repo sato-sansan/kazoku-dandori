@@ -67,14 +67,15 @@ async function post(path: string, token: string, payload: unknown) {
 /** 返信（無料）。返信トークンが切れていたら false を返す */
 export async function reply(token: string, replyToken: string, messages: OutMessage[]) {
   const res = await post("reply", token, { replyToken, messages });
-  if (!res.ok) console.error("line reply failed", res.status);
+  // 失敗の理由は LINE の返事に出る（本文は含まれない）
+  if (!res.ok) console.error("line reply failed", res.status, (await res.text()).slice(0, 300));
   return res.ok;
 }
 
 /** プッシュ（通数を使う）。返信できなかったときと定時のお知らせだけ */
 export async function push(token: string, to: string, messages: OutMessage[]) {
   const res = await post("push", token, { to, messages });
-  if (!res.ok) throw new Error(`line push failed: ${res.status}`);
+  if (!res.ok) throw new Error(`line push failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
 }
 
 /** 画像を保存せずメモリにだけ取り出す。送信取消などで取れないときは null */
