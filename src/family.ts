@@ -417,8 +417,8 @@ export class Family extends DurableObject<Env> {
     }
 
     // 写真：「この写真 残して」／「学芸会のお便り見せて」
-    // 「この写真 残して」「この写真 ○○と△△の成長記録にしておいて」。成長記録は子どもの名前つきで家のページに並ぶ
-    if (/成長記録|^(この)?(写真|これ)[\s　]*(を)?.*(残して|のこして|とっておいて|記録して|記録しておいて)$/.test(text)) {
+    // 「この写真 残して」「思い出に入れておいて」「この写真 ○○と△△の成長記録にしておいて」。成長記録は子どもの名前つきで家のページに並ぶ
+    if (wantsToKeepPhoto(text)) {
       await this.keepRecentPhoto(queued, text);
       return;
     }
@@ -658,18 +658,18 @@ export class Family extends DurableObject<Env> {
     }
   }
 
-  /** 「この写真 残して」：直前（10分以内）の写真を家族の写真として残す */
+  /** 「この写真 残して」「思い出に入れておいて」：直前の写真を家族の写真として残す */
   private async keepRecentPhoto(queued: QueuedEvent, text: string) {
-    // 文に出てくる子どもの呼び名で「だれの成長記録か」を決める。名前が無ければ家族の写真
+    // 文に出てくる子どもの呼び名で「だれの成長記録か」を決める。名前が無ければ家族の写真（思い出）
     const names = this.profile().children.map((c) => c.name).filter((n) => text.includes(n));
     const growth = names.length > 0 || /成長記録/.test(text);
-    const label = names.length > 0 ? names.join("・") : growth ? "成長記録" : "家族の写真";
+    const label = names.length > 0 ? names.join("・") : growth ? "成長記録" : /思い出|アルバム/.test(text) ? "思い出" : "家族の写真";
     const recent = this.sql
       .exec("SELECT message_id FROM recent_images ORDER BY received_at DESC LIMIT 1")
       .toArray()[0];
     if (!recent) {
       await this.send(queued, [
-        { type: "text", text: `残す写真が見つかりません。写真を送ってから「この写真 ${names[0] ?? "○○"}の成長記録に」と言ってください。` },
+        { type: "text", text: `残す写真が見つかりません。写真を送ってから「思い出に入れておいて」か「この写真 ${names[0] ?? "○○"}の成長記録に」と言ってください。` },
       ]);
       return;
     }
@@ -689,7 +689,7 @@ export class Family extends DurableObject<Env> {
         type: "text",
         text: growth
           ? `成長記録に残しました（${label}）。家のページの「成長記録」に並びます。`
-          : "残しました。家のページの「成長記録」と今日の日付から見られます。",
+          : "思い出に残しました。家のページの「成長記録」と今日の日付から見られます。",
       },
     ]);
   }
@@ -1184,6 +1184,19 @@ function isWeekend(date: string) {
 function isUrgentPickup(text: string) {
   if (/引受 #\d+/.test(text)) return false;
   return /迎え|むかえ/.test(text) && /今すぐ|今から|至急|すぐ|電話|呼び出し|だれか|誰か|行ける|頼め|頼ん|お願い/.test(text);
+}
+
+/**
+ * 直前の写真を残してほしい言い方。
+ * 「思い出に入れておいて」「アルバムに」「この写真 残して」「写真とっといて」「○○の成長記録に」「保存して」
+ * 「思い出」「写真」だけの雑談（「いい思い出になるね」）は拾わない
+ */
+export function wantsToKeepPhoto(text: string): boolean {
+  const t = text.replace(/[\s　]/g, "");
+  if (/成長記録/.test(t)) return true;
+  if (/(思い出|アルバム|記録)に(入れ|いれ|して|残し|のこし|とっ|しといて|しておいて|追加)/.test(t)) return true;
+  if (/^(この)?(写真|これ)(を|は)?.*(残し|のこし|とっ(て|と)お|とっとい|記録し|保存し|入れ(て|と)お|入れとい|思い出に)/.test(t)) return true;
+  return /^(残して|のこして|とっておいて|とっといて|保存して|保存しておいて|保存しといて)$/.test(t);
 }
 
 function toSlot(row: SlotRow): Slot {

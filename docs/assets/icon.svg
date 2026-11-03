@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+  <!-- だんどりさんの顔（LINE 公式アカウントのアイコン・丸く切り抜かれる）。richmenu.svg と同じ絵。直したら scripts/svg2png.swift docs/assets/icon.svg docs/assets/icon.png 640 640 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFF4DC"/><stop offset="1" stop-color="#FFE6BE"/></linearGradient>
+    <radialGradient id="body" cx="0.4" cy="0.35" r="0.75"><stop offset="0" stop-color="#FFFBEF"/><stop offset="1" stop-color="#FFE3A6"/></radialGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#BDE8A6"/><stop offset="1" stop-color="#7FC46A"/></linearGradient>
+  </defs>
+  <rect width="640" height="640" fill="url(#bg)"/>
+  <g transform="translate(318 362) scale(2.55)">
+    <!-- 双葉 -->
+    <path d="M2 -72 q-6 -30 -34 -36 q4 28 34 36z" fill="url(#leaf)" stroke="#4A3B2A" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M2 -72 q6 -30 34 -36 q-4 28 -34 36z" fill="url(#leaf)" stroke="#4A3B2A" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M2 -44 v-28" stroke="#4A3B2A" stroke-width="4" stroke-linecap="round"/>
+    <!-- 体 -->
+    <path d="M-80 12 q-6 -80 80 -84 q86 4 80 84 q-4 62 -80 66 q-76 -4 -80 -66z" fill="url(#body)" stroke="#4A3B2A" stroke-width="5"/>
+    <ellipse cx="-30" cy="-34" rx="22" ry="12" fill="#FFFFFF" opacity="0.7" transform="rotate(-20 -30 -34)"/>
+    <!-- 手 -->
+    <ellipse cx="-84" cy="36" rx="17" ry="12" fill="url(#body)" stroke="#4A3B2A" stroke-width="5" transform="rotate(-30 -84 36)"/>
+    <ellipse cx="86" cy="18" rx="17" ry="12" fill="url(#body)" stroke="#4A3B2A" stroke-width="5" transform="rotate(35 86 18)"/>
+    <!-- 目（きらきら） -->
+    <ellipse cx="-30" cy="8" rx="11" ry="14" fill="#3A2E22"/>
+    <ellipse cx="30" cy="8" rx="11" ry="14" fill="#3A2E22"/>
+    <circle cx="-26" cy="2" r="4.5" fill="#FFFFFF"/><circle cx="34" cy="2" r="4.5" fill="#FFFFFF"/>
+    <circle cx="-33" cy="13" r="2" fill="#FFFFFF"/><circle cx="27" cy="13" r="2" fill="#FFFFFF"/>
+    <!-- ほっぺ・口 -->
+    <ellipse cx="-54" cy="28" rx="13" ry="9" fill="#FFB1B6" opacity="0.9"/>
+    <ellipse cx="54" cy="28" rx="13" ry="9" fill="#FFB1B6" opacity="0.9"/>
+    <path d="M-12 30 q12 16 24 0" fill="#E0503F" stroke="#4A3B2A" stroke-width="4" stroke-linejoin="round"/>
+  </g>
+</svg>
