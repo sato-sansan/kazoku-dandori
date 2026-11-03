@@ -12,7 +12,7 @@ export interface Card {
   deadline: string | null;
   items: string[];
   money: number | null;
-  who_acts: "未定" | "パパ" | "ママ" | "ジージ" | "バーバ";
+  who_acts: "未定" | "パパ" | "ママ" | "じいじ" | "ばあば";
   confidence: "高" | "低";
   ask: string | null;
 }
@@ -50,7 +50,7 @@ export const READ_RESULT_SCHEMA = {
           deadline: { ...nullableString, description: "YYYY-MM-DD。書いていなければ null" },
           items: { type: "array", items: { type: "string" } },
           money: { type: ["integer", "null"], description: "円。書いていなければ null" },
-          who_acts: { type: "string", enum: ["未定", "パパ", "ママ", "ジージ", "バーバ"] },
+          who_acts: { type: "string", enum: ["未定", "パパ", "ママ", "じいじ", "ばあば"] },
           confidence: { type: "string", enum: ["高", "低"] },
           ask: { ...nullableString, description: "分からないことを1つだけ。なければ null" },
         },

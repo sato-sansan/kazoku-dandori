@@ -6,7 +6,7 @@ export interface FamilyProfile {
 }
 
 const SAMPLE_FAMILY: FamilyProfile = {
-  adults: ["パパ", "ママ", "ジージ", "バーバ"],
+  adults: ["パパ", "ママ", "じいじ", "ばあば"],
   children: [
     { name: "はると", grade: "小学2年", attends: "小学校" },
     { name: "ゆい", grade: "5歳", attends: "保育所" },
