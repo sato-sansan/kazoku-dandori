@@ -1,0 +1,60 @@
+{
+  "id": "public-12",
+  "topic": "手書き風・斜めのメモ（持ち物・日付あり） → 読めるか",
+  "input": {
+    "type": "image",
+    "image": "images/public-12.png"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": "持ち物",
+        "title": "図工で使うもの",
+        "date": "2026-11-13",
+        "time": null,
+        "place": "小学校",
+        "deadline": null,
+        "items": [
+          "新聞紙",
+          "のり"
+        ],
+        "money": null
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {}
+  }
+}

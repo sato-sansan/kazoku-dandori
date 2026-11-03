@@ -1,0 +1,57 @@
+{
+  "id": "public-15",
+  "topic": "「熱で休み」のひとこと → 欠席カード",
+  "input": {
+    "type": "text",
+    "text": "ゆい、38度の熱が出たので 11月6日（金）は保育所をお休みします"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "ゆい",
+        "kind": "欠席",
+        "title": "熱でお休み",
+        "date": "2026-11-06",
+        "time": null,
+        "place": "保育所",
+        "deadline": null,
+        "items": [],
+        "money": null
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {}
+  }
+}

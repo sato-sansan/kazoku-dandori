@@ -1,0 +1,67 @@
+{
+  "id": "public-14",
+  "topic": "小学校アプリの「お知らせ」画面（PTA役員の募集・締切あり）",
+  "input": {
+    "type": "image",
+    "image": "images/public-14.png"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": [
+          "連絡",
+          "提出"
+        ],
+        "title": "PTA役員の募集",
+        "date": null,
+        "time": null,
+        "place": "小学校",
+        "deadline": "2026-11-18",
+        "items": [],
+        "money": null
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {
+      "dates": [
+        "2026-11-04"
+      ],
+      "times": [
+        "12:30"
+      ]
+    }
+  }
+}

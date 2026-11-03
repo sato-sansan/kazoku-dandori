@@ -1,0 +1,61 @@
+{
+  "id": "public-06",
+  "topic": "集金のお知らせ（金額と期限だけ）",
+  "input": {
+    "type": "image",
+    "image": "images/public-06.png"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": "集金",
+        "title": "教材費",
+        "date": null,
+        "time": null,
+        "place": null,
+        "deadline": "2026-11-13",
+        "items": [],
+        "money": 1200
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {
+      "dates": [
+        "2026-11-05"
+      ]
+    }
+  }
+}

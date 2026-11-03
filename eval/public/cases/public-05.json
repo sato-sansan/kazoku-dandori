@@ -1,0 +1,82 @@
+{
+  "id": "public-05",
+  "topic": "習い事（スイミング）のLINE転送 → public-01 と同じ日にぶつかる",
+  "input": {
+    "type": "image",
+    "image": "images/public-05.png"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": "習い事",
+        "title": "スイミングの進級テスト",
+        "date": "2026-11-15",
+        "time": "09:30",
+        "place": "スイミング",
+        "deadline": null,
+        "items": [
+          "水着",
+          "キャップ",
+          "ゴーグル",
+          "タオル"
+        ],
+        "money": null
+      },
+      {
+        "child": "はると",
+        "kind": "送迎",
+        "title": "スイミングの送迎",
+        "date": "2026-11-15",
+        "time": "09:30",
+        "place": "スイミング",
+        "deadline": null,
+        "items": [],
+        "money": null
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {
+      "dates": [
+        "2026-11-14"
+      ],
+      "times": [
+        "09:15",
+        "10:30",
+        "16:40"
+      ]
+    }
+  }
+}

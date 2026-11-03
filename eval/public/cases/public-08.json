@@ -1,0 +1,60 @@
+{
+  "id": "public-08",
+  "topic": "日付のない「来週の月曜日」 → 聞き返しが正解（date は null）",
+  "input": {
+    "type": "image",
+    "image": "images/public-08.png"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": "行事",
+        "title": "校外学習",
+        "date": null,
+        "time": null,
+        "place": "小学校",
+        "deadline": null,
+        "items": [
+          "水筒",
+          "帽子"
+        ],
+        "money": null
+      }
+    ],
+    "ask_expected": true,
+    "also_written": {}
+  }
+}

@@ -27,7 +27,7 @@ import {
 } from "./pickup";
 import { loadProfile } from "./profile";
 import { readNotice, type ReadInput } from "./reader";
-import { addDays, jstDate, jstToMs, nextSundayEvening, weekRange } from "./time";
+import { addDays, jstDate, jstTime, jstToMs, nextSundayEvening, weekRange } from "./time";
 import { ADULTS, type Adult, type FamilyEvent, type Slot } from "./types";
 
 // 返信トークンは1分以内が目安。余裕をみて、これを過ぎたらプッシュで届ける
@@ -209,6 +209,11 @@ export class Family extends DurableObject<Env> {
     }
     const today = jstDate();
     const request = parseRequest(text, today);
+    // 1対1でも「今すぐ」なら今日の今の時刻
+    if (request && /今すぐ|今から|至急|すぐ/.test(text)) {
+      request.date = today;
+      request.time = jstTime();
+    }
     if (!request) {
       await this.send(queued, [
         { type: "text", text: "分かりませんでした。例：「明日17時のお迎え頼んでおいて」" },
@@ -275,6 +280,26 @@ export class Family extends DurableObject<Env> {
     }
     if (/^段取り[\s：:]*冒険$/.test(text)) {
       await this.sendWeeklyCard();
+      return;
+    }
+
+    // 急なお迎え：「園から電話、今すぐお迎え」「今日15時にお迎えだれか行ける？」→ その場で名前ボタン
+    if (isUrgentPickup(text)) {
+      const role = this.roleOf(userId);
+      const parsed = parseRequest(text, today);
+      const now = jstTime();
+      // 時刻が書いてなければ「今」。書いてあっても今より前なら「今」
+      const time = parsed && parsed.date === today && parsed.time > now ? parsed.time : now;
+      const slot = this.findOrCreateSlot(today, time, "迎え", "グループ");
+      if (slot.status === "決定") {
+        await this.send(queued, [{ type: "text", text: `${describeSlot(slot, today)}は、${slot.who}に決まっています。` }]);
+        return;
+      }
+      this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = 'グループ' WHERE id = ?", slot.id);
+      await this.send(queued, [
+        { type: "text", text: "🚨 急ぎのお迎えです。行ける人はボタンを押してください。" },
+        askMessage({ ...slot, status: "お願い中" }, { exclude: role ?? undefined }),
+      ]);
       return;
     }
 
@@ -585,6 +610,12 @@ export class Family extends DurableObject<Env> {
     const to = queued.event.source.type === "user" ? queued.event.source.userId! : queued.familyId;
     await push(token, to, messages);
   }
+}
+
+/** グループでの急なお迎えの頼み。「お迎え」＋急ぎ・呼びかけの言葉。引受のボタン文は除く */
+function isUrgentPickup(text: string) {
+  if (/引受 #\d+/.test(text)) return false;
+  return /迎え|むかえ/.test(text) && /今すぐ|今から|至急|すぐ|電話|呼び出し|だれか|誰か|行ける|頼め|頼ん|お願い/.test(text);
 }
 
 function toSlot(row: SlotRow): Slot {

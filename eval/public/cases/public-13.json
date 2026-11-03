@@ -1,0 +1,61 @@
+{
+  "id": "public-13",
+  "topic": "保育所で実施する歯科検診（送迎は不要）",
+  "input": {
+    "type": "image",
+    "image": "images/public-13.png"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "ゆい",
+        "kind": "通院",
+        "title": "歯科検診",
+        "date": "2026-11-10",
+        "time": "14:00",
+        "place": "保育所",
+        "deadline": null,
+        "items": [],
+        "money": null
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {
+      "dates": [
+        "2026-11-04"
+      ]
+    }
+  }
+}

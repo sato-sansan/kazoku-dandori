@@ -1,0 +1,65 @@
+{
+  "id": "public-01",
+  "topic": "小学校の学芸会（紙）",
+  "input": {
+    "type": "image",
+    "image": "images/public-01.png"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": "行事",
+        "title": "学芸会",
+        "date": "2026-11-15",
+        "time": "09:00",
+        "place": "小学校",
+        "deadline": "2026-11-12",
+        "items": [
+          "体操服",
+          "上ばき"
+        ],
+        "money": 500
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {
+      "times": [
+        "08:40",
+        "09:20"
+      ]
+    }
+  }
+}

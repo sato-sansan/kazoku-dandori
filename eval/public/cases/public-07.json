@@ -1,0 +1,60 @@
+{
+  "id": "public-07",
+  "topic": "持ち物のお知らせ（金額なし・期限なし）",
+  "input": {
+    "type": "image",
+    "image": "images/public-07.png"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "そうた",
+        "kind": "持ち物",
+        "title": "制作で使う材料",
+        "date": null,
+        "time": null,
+        "place": "保育所",
+        "deadline": null,
+        "items": [
+          "空き箱",
+          "トイレットペーパーの芯"
+        ],
+        "money": null
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {}
+  }
+}

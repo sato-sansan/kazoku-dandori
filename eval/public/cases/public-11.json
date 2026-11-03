@@ -1,0 +1,45 @@
+{
+  "id": "public-11",
+  "topic": "家族の雑談 → 予定ではない",
+  "input": {
+    "type": "text",
+    "text": "今日の夕飯なに？カレーでいい？"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": false,
+    "cards": [],
+    "ask_expected": false,
+    "also_written": {}
+  }
+}

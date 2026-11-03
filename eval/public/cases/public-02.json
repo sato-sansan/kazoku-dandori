@@ -1,0 +1,69 @@
+{
+  "id": "public-02",
+  "topic": "小学校の遠足（紙）。「11月20日（木）」は実際は金曜 → 聞き返しが正解",
+  "input": {
+    "type": "image",
+    "image": "images/public-02.png"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": "行事",
+        "title": "秋の遠足",
+        "date": "2026-11-20",
+        "time": "08:30",
+        "place": "小学校",
+        "deadline": null,
+        "items": [
+          "お弁当",
+          "水筒",
+          "レジャーシート",
+          "雨がっぱ"
+        ],
+        "money": null
+      }
+    ],
+    "ask_expected": true,
+    "also_written": {
+      "dates": [
+        "2026-11-27"
+      ],
+      "times": [
+        "15:00"
+      ]
+    }
+  }
+}

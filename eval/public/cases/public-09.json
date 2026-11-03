@@ -1,0 +1,81 @@
+{
+  "id": "public-09",
+  "topic": "2つの予定が1枚に（授業参観・マラソン大会） → カードが2枚",
+  "input": {
+    "type": "image",
+    "image": "images/public-09.png"
+  },
+  "today": "2026-11-03",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": "行事",
+        "title": "授業参観",
+        "date": "2026-11-11",
+        "time": "14:00",
+        "place": "小学校",
+        "deadline": null,
+        "items": [
+          "上ばき"
+        ],
+        "money": null
+      },
+      {
+        "child": "はると",
+        "kind": "行事",
+        "title": "マラソン大会",
+        "date": "2026-11-19",
+        "time": "10:00",
+        "place": "小学校",
+        "deadline": null,
+        "items": [
+          "体操服",
+          "タオル",
+          "水筒"
+        ],
+        "money": null
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {
+      "dates": [
+        "2026-11-04"
+      ],
+      "times": [
+        "14:45"
+      ]
+    }
+  }
+}
