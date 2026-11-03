@@ -1,57 +1,125 @@
-<!-- だんどりさんのホーム画面（LINE リッチメニュー 2500×843）。絵は期間中に自作。直したら scripts/svg2png.swift で PNG にして、グループで「リッチメニュー 作り直し」 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="2500" height="843" viewBox="0 0 2500 843" font-family="Zen Maru Gothic, Hiragino Maru Gothic ProN, Hiragino Sans, sans-serif">
-  <rect width="2500" height="843" fill="#FFFFFF"/>
-  <path d="M625 40 v763 M1250 40 v763 M1875 40 v763" stroke="#E6E0D6" stroke-width="4"/>
+  <!-- だんどりさんのホーム画面（LINE リッチメニュー 2500×843）。絵は期間中に自作。直したら scripts/svg2png.swift で PNG にして、グループで「リッチメニュー 作り直し」 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFF9EC"/><stop offset="1" stop-color="#FFEFD6"/></linearGradient>
+    <radialGradient id="body" cx="0.4" cy="0.35" r="0.75"><stop offset="0" stop-color="#FFFBEF"/><stop offset="1" stop-color="#FFE3A6"/></radialGradient>
+    <radialGradient id="face" cx="0.4" cy="0.35" r="0.75"><stop offset="0" stop-color="#FFF4D6"/><stop offset="1" stop-color="#FFD98F"/></radialGradient>
+    <linearGradient id="y" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFF0BC"/><stop offset="1" stop-color="#FFE194"/></linearGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#DCEEFF"/><stop offset="1" stop-color="#BFDFFF"/></linearGradient>
+    <linearGradient id="p" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFE1E6"/><stop offset="1" stop-color="#FFCBD4"/></linearGradient>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E3F5D9"/><stop offset="1" stop-color="#C9ECBB"/></linearGradient>
+    <linearGradient id="white" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#EEF0F4"/></linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FF7B6B"/><stop offset="1" stop-color="#E0503F"/></linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#CFE9FF"/><stop offset="1" stop-color="#7FBBFF"/></linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#BDE8A6"/><stop offset="1" stop-color="#7FC46A"/></linearGradient>
+    <linearGradient id="dark" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5A4A3A"/><stop offset="1" stop-color="#3A2E22"/></linearGradient>
+  </defs>
+  <rect width="2500" height="843" fill="url(#bg)"/>
 
+  <!-- 上の帯：だんどりさん -->
+  <g transform="translate(132 112)">
+    <!-- 双葉 -->
+    <path d="M2 -72 q-6 -30 -34 -36 q4 28 34 36z" fill="url(#leaf)" stroke="#4A3B2A" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M2 -72 q6 -30 34 -36 q-4 28 -34 36z" fill="url(#leaf)" stroke="#4A3B2A" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M2 -44 v-28" stroke="#4A3B2A" stroke-width="4" stroke-linecap="round"/>
+    <!-- 体 -->
+    <path d="M-80 12 q-6 -80 80 -84 q86 4 80 84 q-4 62 -80 66 q-76 -4 -80 -66z" fill="url(#body)" stroke="#4A3B2A" stroke-width="5"/>
+    <ellipse cx="-30" cy="-34" rx="22" ry="12" fill="#FFFFFF" opacity="0.7" transform="rotate(-20 -30 -34)"/>
+    <!-- 手 -->
+    <ellipse cx="-84" cy="36" rx="17" ry="12" fill="url(#body)" stroke="#4A3B2A" stroke-width="5" transform="rotate(-30 -84 36)"/>
+    <ellipse cx="86" cy="18" rx="17" ry="12" fill="url(#body)" stroke="#4A3B2A" stroke-width="5" transform="rotate(35 86 18)"/>
+    <!-- 目（きらきら） -->
+    <ellipse cx="-30" cy="8" rx="11" ry="14" fill="#3A2E22"/>
+    <ellipse cx="30" cy="8" rx="11" ry="14" fill="#3A2E22"/>
+    <circle cx="-26" cy="2" r="4.5" fill="#FFFFFF"/><circle cx="34" cy="2" r="4.5" fill="#FFFFFF"/>
+    <circle cx="-33" cy="13" r="2" fill="#FFFFFF"/><circle cx="27" cy="13" r="2" fill="#FFFFFF"/>
+    <!-- ほっぺ・口 -->
+    <ellipse cx="-54" cy="28" rx="13" ry="9" fill="#FFB1B6" opacity="0.9"/>
+    <ellipse cx="54" cy="28" rx="13" ry="9" fill="#FFB1B6" opacity="0.9"/>
+    <path d="M-12 30 q12 16 24 0" fill="#E0503F" stroke="#4A3B2A" stroke-width="4" stroke-linejoin="round"/>
+  </g>
+  <text x="246" y="122" font-size="72" font-weight="700" fill="#4A3B2A">だんどりさん</text>
+  <!-- ふきだし -->
+  <g transform="translate(2470 96)">
+    <rect x="-566" y="-54" width="566" height="108" rx="54" fill="#FFFFFF" stroke="#EAD9BA" stroke-width="4"/>
+    <path d="M-566 -4 l-30 10 l30 18z" fill="#FFFFFF" stroke="#EAD9BA" stroke-width="4" stroke-linejoin="round"/>
+    <text x="-283" y="20" font-size="54" font-weight="700" fill="#7A6A56" text-anchor="middle">きょうも、おまかせ！</text>
+  </g>
+
+  <!-- 4つのボタン：字は 104px（iPhone で約16pt） -->
   <g id="t1">
-    <circle cx="312" cy="330" r="170" fill="#FFF1C2"/>
-    <g transform="translate(312 330)">
-      <rect x="-100" y="-80" width="200" height="180" rx="22" fill="#FFFFFF" stroke="#2B2B2B" stroke-width="10"/>
-      <rect x="-100" y="-80" width="200" height="50" rx="22" fill="#E05A4E"/>
-      <rect x="-100" y="-55" width="200" height="25" fill="#E05A4E"/>
-      <rect x="-60" y="-100" width="16" height="44" rx="8" fill="#2B2B2B"/>
-      <rect x="44" y="-100" width="16" height="44" rx="8" fill="#2B2B2B"/>
-      <text x="0" y="68" font-size="96" font-weight="700" fill="#2B2B2B" text-anchor="middle">7</text>
+    <rect x="35" y="203" width="585" height="625" rx="44" fill="#E8CF92"/>
+    <rect x="35" y="195" width="585" height="625" rx="44" fill="url(#y)" stroke="#FFFFFF" stroke-width="4"/>
+    <g transform="translate(327 450) scale(1.35)">
+      <rect x="-96" y="-72" width="200" height="180" rx="22" fill="#D8C27E" opacity="0.5"/>
+      <rect x="-100" y="-80" width="200" height="180" rx="22" fill="url(#white)" stroke="#4A3B2A" stroke-width="8"/>
+      <path d="M-100 -58 q0 -22 22 -22 h156 q22 0 22 22 v28 h-200z" fill="url(#red)"/>
+      <rect x="-86" y="-70" width="172" height="8" rx="4" fill="#FFFFFF" opacity="0.45"/>
+      <rect x="-62" y="-102" width="18" height="48" rx="9" fill="#8A8F99" stroke="#4A3B2A" stroke-width="4"/>
+      <rect x="44" y="-102" width="18" height="48" rx="9" fill="#8A8F99" stroke="#4A3B2A" stroke-width="4"/>
+      <circle cx="-55" cy="12" r="11" fill="#4A3B2A"/><circle cx="0" cy="12" r="11" fill="#4A3B2A"/><circle cx="55" cy="12" r="11" fill="#4A3B2A"/>
+      <circle cx="-55" cy="62" r="11" fill="#4A3B2A"/>
+      <path d="M0 74 c-16 -20 -38 -6 -24 14 l24 22 l24 -22 c14 -20 -8 -34 -24 -14z" fill="url(#red)" stroke="#4A3B2A" stroke-width="3"/>
+      <circle cx="55" cy="62" r="11" fill="#4A3B2A"/>
     </g>
-    <text x="312" y="640" font-size="86" font-weight="700" fill="#1F1F1F" text-anchor="middle">カレンダー</text>
-    <text x="312" y="720" font-size="40" fill="#6B6B6B" text-anchor="middle">予定を見る</text>
+    <text x="327" y="770" font-size="104" font-weight="700" fill="#3A2F24" text-anchor="middle">カレンダー</text>
   </g>
 
   <g id="t2">
-    <circle cx="937" cy="330" r="170" fill="#DCEEFF"/>
-    <g transform="translate(937 340)">
-      <path d="M-120 20 v-30 q0 -20 20 -20 l20 -50 q8 -16 26 -16 h108 q18 0 26 16 l20 50 q20 0 20 20 v30 q0 16 -16 16 h-208 q-16 0 -16 -16z" fill="#FFFFFF" stroke="#2B2B2B" stroke-width="10" stroke-linejoin="round"/>
-      <path d="M-76 -30 l14 -36 h44 v36z M-8 -30 v-36 h44 l14 36z" fill="#9CCBFF" stroke="#2B2B2B" stroke-width="6" stroke-linejoin="round"/>
-      <circle cx="-70" cy="40" r="26" fill="#2B2B2B"/><circle cx="-70" cy="40" r="10" fill="#FFFFFF"/>
-      <circle cx="70" cy="40" r="26" fill="#2B2B2B"/><circle cx="70" cy="40" r="10" fill="#FFFFFF"/>
+    <rect x="650" y="203" width="585" height="625" rx="44" fill="#9FC4E6"/>
+    <rect x="650" y="195" width="585" height="625" rx="44" fill="url(#b)" stroke="#FFFFFF" stroke-width="4"/>
+    <g transform="translate(942 462) scale(1.35)">
+      <ellipse cx="0" cy="66" rx="128" ry="12" fill="#8FB6DB" opacity="0.6"/>
+      <path d="M-124 20 v-32 q0 -22 22 -22 l22 -50 q8 -16 26 -16 h108 q18 0 26 16 l22 50 q22 0 22 22 v32 q0 16 -16 16 h-216 q-16 0 -16 -16z" fill="url(#white)" stroke="#4A3B2A" stroke-width="8" stroke-linejoin="round"/>
+      <path d="M-78 -30 l16 -38 h44 v38z M-6 -30 v-38 h44 l16 38z" fill="url(#glass)" stroke="#4A3B2A" stroke-width="6" stroke-linejoin="round"/>
+      <path d="M-66 -60 l10 -4 l-14 30z" fill="#FFFFFF" opacity="0.8"/>
+      <rect x="-124" y="-8" width="248" height="10" fill="#E4E7EC"/>
+      <circle cx="-72" cy="40" r="28" fill="#3A2E22"/><circle cx="-72" cy="40" r="12" fill="#D9DCE2"/>
+      <circle cx="72" cy="40" r="28" fill="#3A2E22"/><circle cx="72" cy="40" r="12" fill="#D9DCE2"/>
+      <circle cx="-104" cy="4" r="10" fill="#FFD23F" stroke="#4A3B2A" stroke-width="3"/><circle cx="104" cy="4" r="10" fill="#FFD23F" stroke="#4A3B2A" stroke-width="3"/>
     </g>
-    <text x="937" y="640" font-size="86" font-weight="700" fill="#1F1F1F" text-anchor="middle">お迎えを頼む</text>
-    <text x="937" y="720" font-size="40" fill="#6B6B6B" text-anchor="middle">だれが行く？</text>
+    <text x="942" y="770" font-size="104" font-weight="700" fill="#3A2F24" text-anchor="middle">お迎え</text>
   </g>
 
   <g id="t3">
-    <circle cx="1562" cy="330" r="170" fill="#FFE1E6"/>
-    <g transform="translate(1562 335)">
-      <circle cx="0" cy="0" r="100" fill="#FFE2A8" stroke="#2B2B2B" stroke-width="10"/>
-      <rect x="-70" y="-78" width="140" height="44" rx="14" fill="#BFE4FF" stroke="#2B2B2B" stroke-width="6"/>
-      <circle cx="-34" cy="10" r="8" fill="#2B2B2B"/><circle cx="34" cy="10" r="8" fill="#2B2B2B"/>
-      <circle cx="-56" cy="34" r="12" fill="#FFB3B3"/><circle cx="56" cy="34" r="12" fill="#FFB3B3"/>
-      <path d="M-16 52 Q0 42 16 52" fill="none" stroke="#2B2B2B" stroke-width="6" stroke-linecap="round"/>
+    <rect x="1265" y="203" width="585" height="625" rx="44" fill="#E6AEB8"/>
+    <rect x="1265" y="195" width="585" height="625" rx="44" fill="url(#p)" stroke="#FFFFFF" stroke-width="4"/>
+    <g transform="translate(1557 450) scale(1.35)">
+      <ellipse cx="0" cy="104" rx="90" ry="10" fill="#E8A9B4" opacity="0.6"/>
+      <circle cx="0" cy="0" r="100" fill="url(#face)" stroke="#4A3B2A" stroke-width="8"/>
+      <path d="M-70 -78 q0 -14 14 -14 h112 q14 0 14 14 v26 q0 14 -14 14 h-112 q-14 0 -14 -14z" fill="#BFE4FF" stroke="#4A3B2A" stroke-width="6"/>
+      <rect x="-56" y="-84" width="112" height="6" rx="3" fill="#FFFFFF" opacity="0.8"/>
+      <ellipse cx="-34" cy="12" rx="8" ry="10" fill="#3A2E22"/><ellipse cx="34" cy="12" rx="8" ry="10" fill="#3A2E22"/>
+      <circle cx="-31" cy="8" r="3" fill="#FFFFFF"/><circle cx="37" cy="8" r="3" fill="#FFFFFF"/>
+      <ellipse cx="-58" cy="36" rx="14" ry="9" fill="#FFA5AD"/><ellipse cx="58" cy="36" rx="14" ry="9" fill="#FFA5AD"/>
+      <path d="M-14 52 Q0 40 14 52" fill="none" stroke="#4A3B2A" stroke-width="6" stroke-linecap="round"/>
+      <path d="M78 -40 q14 8 6 22 q-12 -2 -6 -22z" fill="#9CCBFF" stroke="#4A3B2A" stroke-width="4" stroke-linejoin="round"/>
+      <g transform="rotate(-25)">
+        <rect x="18" y="40" width="120" height="24" rx="12" fill="#FFFFFF" stroke="#4A3B2A" stroke-width="6"/>
+        <rect x="26" y="47" width="64" height="10" rx="5" fill="#E0503F"/>
+        <circle cx="128" cy="52" r="6" fill="#E0503F"/>
+      </g>
     </g>
-    <text x="1562" y="640" font-size="86" font-weight="700" fill="#1F1F1F" text-anchor="middle">休みの連絡</text>
-    <text x="1562" y="720" font-size="40" fill="#6B6B6B" text-anchor="middle">園・学校への文</text>
+    <text x="1557" y="770" font-size="104" font-weight="700" fill="#3A2F24" text-anchor="middle">休みの連絡</text>
   </g>
 
   <g id="t4">
-    <circle cx="2187" cy="330" r="170" fill="#E2F5DA"/>
-    <g transform="translate(2187 340)">
-      <rect x="-110" y="-64" width="220" height="150" rx="24" fill="#2B2B2B"/>
-      <rect x="-46" y="-90" width="92" height="34" rx="12" fill="#2B2B2B"/>
-      <circle cx="0" cy="12" r="52" fill="#FFFFFF"/>
-      <circle cx="0" cy="12" r="30" fill="#9CCBFF"/>
-      <circle cx="78" cy="-34" r="10" fill="#FFD23F"/>
+    <rect x="1880" y="203" width="585" height="625" rx="44" fill="#A9CF9A"/>
+    <rect x="1880" y="195" width="585" height="625" rx="44" fill="url(#g)" stroke="#FFFFFF" stroke-width="4"/>
+    <g transform="translate(2172 450) scale(1.35)">
+      <rect x="-70" y="-90" width="160" height="200" rx="14" fill="#9DBF8E" opacity="0.5" transform="rotate(6)"/>
+      <rect x="-80" y="-100" width="160" height="200" rx="14" fill="url(#white)" stroke="#4A3B2A" stroke-width="8"/>
+      <path d="M-50 -60 h100 M-50 -25 h100 M-50 10 h70" stroke="#B9B0A2" stroke-width="10" stroke-linecap="round"/>
+      <path d="M-46 -82 c-8 -10 -20 -2 -12 8 l12 12 l12 -12 c8 -10 -4 -18 -12 -8z" fill="#FF8F9A"/>
+      <g transform="translate(40 52)">
+        <rect x="-64" y="-36" width="128" height="88" rx="18" fill="url(#dark)" stroke="#2A2118" stroke-width="3"/>
+        <rect x="-28" y="-50" width="56" height="22" rx="8" fill="url(#dark)" stroke="#2A2118" stroke-width="3"/>
+        <circle cx="0" cy="8" r="28" fill="#FFFFFF"/>
+        <circle cx="0" cy="8" r="18" fill="url(#glass)"/>
+        <circle cx="-6" cy="2" r="5" fill="#FFFFFF" opacity="0.9"/>
+        <circle cx="44" cy="-18" r="6" fill="#FFD23F"/>
+      </g>
     </g>
-    <text x="2187" y="640" font-size="86" font-weight="700" fill="#1F1F1F" text-anchor="middle">お便りを送る</text>
-    <text x="2187" y="720" font-size="40" fill="#6B6B6B" text-anchor="middle">写真を撮るだけ</text>
+    <text x="2172" y="770" font-size="104" font-weight="700" fill="#3A2F24" text-anchor="middle">お便り</text>
   </g>
 </svg>
