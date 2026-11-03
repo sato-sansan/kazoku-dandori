@@ -11,7 +11,20 @@ export class Directory extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    this.sql.exec("CREATE TABLE IF NOT EXISTS members (user_id TEXT PRIMARY KEY, family_id TEXT NOT NULL)");
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS members (user_id TEXT PRIMARY KEY, family_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS tokens (token TEXT PRIMARY KEY, family_id TEXT NOT NULL);
+    `);
+  }
+
+  /** カレンダーの合言葉 → 家族。合言葉は家族の箱が作る */
+  async registerToken(token: string, familyId: string) {
+    this.sql.exec("INSERT OR REPLACE INTO tokens (token, family_id) VALUES (?, ?)", token, familyId);
+  }
+
+  async familyOfToken(token: string): Promise<string | null> {
+    const row = this.sql.exec("SELECT family_id FROM tokens WHERE token = ?", token).toArray()[0];
+    return row ? (row.family_id as string) : null;
   }
 
   async register(userId: string, familyId: string) {

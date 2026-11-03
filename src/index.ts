@@ -7,6 +7,26 @@ export { Directory } from "./directory";
 export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
+
+    // 家族のカレンダー。長い合言葉を知っている人だけ。ログインはない
+    const cal = /^\/cal\/([a-f0-9]{32})(\.ics)?$/.exec(url.pathname);
+    if (cal && request.method === "GET") {
+      const familyId = await env.DIRECTORY.get(env.DIRECTORY.idFromName("directory")).familyOfToken(cal[1]);
+      if (!familyId) return new Response("Not Found", { status: 404 });
+      const family = env.FAMILY.get(env.FAMILY.idFromName(familyId));
+      const noStore = { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" };
+      if (cal[2]) {
+        return new Response(await family.calendarIcs(), {
+          headers: { ...noStore, "Content-Type": "text/calendar; charset=utf-8" },
+        });
+      }
+      const view = url.searchParams.get("view") === "month" ? "month" : "week";
+      const anchor = url.searchParams.get("anchor") ?? undefined;
+      return new Response(await family.calendarPage(`${url.origin}/cal/${cal[1]}`, view, anchor), {
+        headers: { ...noStore, "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
     if (url.pathname !== "/line/webhook") {
       return new Response("だんどりさん", { status: url.pathname === "/" ? 200 : 404 });
     }

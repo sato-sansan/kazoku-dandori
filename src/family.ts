@@ -7,6 +7,7 @@ import {
   xpLine,
   type AdventureStats,
 } from "./adventure";
+import { renderCalendar, renderIcs } from "./calendar";
 import { firstQuestion, type Card, type CardSource } from "./card";
 import { absenceMessages, draftAbsence, looksLikeAbsence } from "./drafts";
 import type { Env } from "./env";
@@ -275,6 +276,19 @@ export class Family extends DurableObject<Env> {
     const button = /^(OK|直す) #(\d+)$/.exec(text);
     if (button) {
       await this.confirmBatch(queued, button[1], button[2]);
+      return;
+    }
+
+    // 「予定 見せて」「カレンダー」→ 合言葉つきの URL（ログインなし）
+    if (/^(予定|カレンダー)[\s　]*(見せて|みせて|教えて|おしえて)?$/.test(text)) {
+      const token = await this.calendarToken(queued.familyId);
+      const base = `https://kazoku-dandori.dandori.workers.dev/cal/${token}`;
+      await this.send(queued, [
+        {
+          type: "text",
+          text: `わが家の予定（週・月）はこちら。家族以外に送らないでください。\n${base}\n\nGoogleカレンダーに入れるときは、この URL を「URL で追加」に貼ります。\n${base}.ics`,
+        },
+      ]);
       return;
     }
 
@@ -582,6 +596,40 @@ export class Family extends DurableObject<Env> {
       if (!slot) return;
       await this.pushToGroup([slot.status === "決定" ? reminderMessage(slot) : undecidedMessage(slot)]);
     } else if (type === "weekly_card") await this.sendWeeklyCard();
+  }
+
+  // ── カレンダー（週・月のページと、購読用の ICS） ─────────────
+
+  /** 合言葉は家族ごとに1つ。なければ作って Directory に登録する */
+  private async calendarToken(familyId: string) {
+    const row = this.sql.exec("SELECT value FROM settings WHERE key = 'cal_token'").toArray()[0];
+    if (row) return row.value as string;
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    const token = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    this.sql.exec("INSERT INTO settings (key, value) VALUES ('cal_token', ?)", token);
+    await this.env.DIRECTORY.get(this.env.DIRECTORY.idFromName("directory")).registerToken(token, familyId);
+    return token;
+  }
+
+  async calendarPage(baseUrl: string, view: "week" | "month", anchor?: string) {
+    const today = jstDate();
+    return renderCalendar({
+      today,
+      view,
+      anchor: anchor && /^\d{4}-\d{2}-\d{2}$/.test(anchor) ? anchor : today,
+      cards: this.okCards(),
+      slots: this.allSlots(),
+      photos: [],
+      baseUrl,
+    });
+  }
+
+  async calendarIcs() {
+    return renderIcs({ cards: this.okCards(), slots: this.allSlots() });
+  }
+
+  private allSlots(): Slot[] {
+    return this.sql.exec<SlotRow>("SELECT * FROM slots ORDER BY date, time").toArray().map(toSlot);
   }
 
   // ── 小さな道具 ───────────────────────────────────────────
