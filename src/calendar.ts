@@ -2,7 +2,7 @@
 // ばあばがスマホで見る前提：390px で横スクロールなし、字は「あ 小中大」で 17/18/22px、ボタンは 44px 以上
 // 最初は月の升目（1画面で月全体。子どもごとの色の頭文字と、送迎の？で一目）。日を押すとその週を1日ずつ縦に（768px 以上で7列）
 
-import type { AdventureStats } from "./adventure";
+import { seasonEmoji, type AdventureStats } from "./adventure";
 import type { Card } from "./card";
 import type { Slot } from "./types";
 import { addDays, jstToMs, jstWeekday } from "./time";
@@ -187,7 +187,7 @@ function noticesHtml(all: Photo[]) {
   if (photos.length === 0) return "";
   const sorted = [...photos].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   return `<section class="notices" aria-labelledby="nt-h">
-<h2 id="nt-h">お便りの写真（${sorted.length}枚）</h2>
+<h2 id="nt-h">📄 お便り（${sorted.length}枚）<small>紙は捨ててOK</small></h2>
 <div class="thumbs">${sorted
     .map((p) => `<figure class="nt">${photoThumb(p)}<figcaption>${esc(shortDate(p.date))} ${esc(p.label)}</figcaption></figure>`)
     .join("")}</div>
@@ -200,7 +200,7 @@ function growthHtml(all: Photo[], idx: Map<string, number>) {
   const sorted = [...photos].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const items =
     sorted.length === 0
-      ? `<p class="none">まだありません。家族の LINE で写真を送ってから「この写真 ○○の成長記録に」と言うと、ここに並びます。</p>`
+      ? `<p class="none">まだありません。家族の LINE に写真を送って「思い出に入れておいて」と言うと、ここに並びます。子どもの名前を入れると（「○○の成長記録に」）その子の印がつきます。</p>`
       : `<div class="thumbs">${sorted
           .map((p) => {
             const names = p.label.split("・").filter((n) => idx.has(n));
@@ -214,29 +214,33 @@ ${items}
 </section>`;
 }
 
-/** わが家の冒険：家族レベル・次のレベルまで・今週のありがとう・つづき・称号・今週だれが何回。順位は付けない */
-function adventureHtml(adv: CalendarInput["adventure"]) {
+/**
+ * わが家の冒険：ありがとう・だれが引き受けたか を先に（ママが見たいのは「わたしだけじゃない」こと）、レベルはその下。順位は付けない。
+ * 言葉は LINE の日曜のカードと同じ（わが家の冒険・わが家の経験値）。XP とは書かない
+ */
+function adventureHtml(adv: CalendarInput["adventure"], today: string) {
   if (!adv) return "";
   const s = adv.stats;
+  const emoji = seasonEmoji(Number(today.slice(5, 7)));
   const total = s.xp + s.nextLevelXp;
   const pct = total > 0 ? Math.min(100, Math.round((s.xp / total) * 100)) : 100;
   const delta = s.thanksDelta > 0 ? `（先週より +${s.thanksDelta}）` : s.thanksDelta < 0 ? `（先週より ${s.thanksDelta}）` : "";
-  const takes = adv.takes.length > 0 ? adv.takes.map((t) => `<span class="chip sv">${esc(t.who)} ${t.count}回</span>`).join("") : `<span class="none">まだ引き受けなし</span>`;
+  const takes = adv.takes.length > 0 ? adv.takes.map((t) => `<span class="chip sv">${esc(t.who)} ${t.count}回</span>`).join("") : `<span class="none">今週はまだ。名前ボタンを押すとここに並びます</span>`;
   const titles = s.titles.length > 0 ? s.titles.map((t) => `<span class="chip ttl">${esc(t.who)}：${esc(t.title)}${t.isNew ? " 🆕" : ""}</span>`).join("") : "";
   const streaks = s.streaks.filter((st) => st.days > 0).map((st) => `<span class="chip">${esc(st.name)} ${st.days}日</span>`).join("");
   return `<section class="adv" aria-labelledby="adv-h">
-<h2 id="adv-h">🏆 わが家の冒険 <small>${esc(s.weekLabel)}</small></h2>
-<p class="lv"><b>レベル${s.level}</b> ${esc(s.levelName)}</p>
-<div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
-<p class="xp">${s.xp} XP${s.nextLevelXp > 0 ? `　次のレベルまで あと ${s.nextLevelXp}` : "　最高レベル！"}</p>
+<h2 id="adv-h">${emoji} わが家の冒険 <small>${esc(s.weekLabel)}</small></h2>
 <dl class="advs">
-<dt>今週のありがとう</dt><dd><b>${s.thanks}</b> 回 ${esc(delta)}</dd>
-<dt>今週の引き受け</dt><dd>${takes}</dd>
-${streaks ? `<dt>つづき</dt><dd>${streaks}</dd>` : ""}
-${titles ? `<dt>称号</dt><dd>${titles}</dd>` : ""}
+<dt>ありがとう</dt><dd><b>${s.thanks}</b> 回 ${esc(delta)}</dd>
+<dt>引き受けた人</dt><dd>${takes}</dd>
 ${s.finePlay ? `<dt>ファインプレー</dt><dd>${esc(s.finePlay.who)}：${esc(s.finePlay.note)}</dd>` : ""}
+${titles ? `<dt>称号</dt><dd>${titles}</dd>` : ""}
+${streaks ? `<dt>つづき</dt><dd>${streaks}</dd>` : ""}
 </dl>
-<p class="hint">引き受け 10 XP・急な引き受け 20 XP・ありがとう 2＋5 XP・連絡文 5 XP。日曜 20:00 に LINE へ今週のカード</p>
+<p class="lv"><b>レベル${s.level}</b> ${esc(s.levelName)}</p>
+<div class="bar" role="progressbar" aria-label="次のレベルまで" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
+<p class="xp">わが家の経験値 ${s.xp}${s.nextLevelXp > 0 ? `　次のレベルまで あと${s.nextLevelXp}` : "　最高レベル"}</p>
+<p class="hint">経験値は、引き受け +10・急な引き受け +20・ありがとう（押した人 +2・受けた人 +5）・連絡文 +5。日曜 20:00 に LINE へ今週のカードが届きます</p>
 </section>`;
 }
 
@@ -325,11 +329,23 @@ ${weeks.join("")}
   return { month, weekSec, first };
 }
 
+/**
+ * 今日と明日：開いてすぐ「だれが送る・迎える」「何を持たせる」が分かるように、月の升目より上に置く。
+ * 共働きの朝は、このページを開く時間が10秒しかない前提
+ */
+function soonHtml(input: CalendarInput, idx: Map<string, number>) {
+  const slots = liveSlots(input.slots);
+  const tomorrow = addDays(input.today, 1);
+  const day = (date: string, word: string) =>
+    `<div class="sd"><h3 class="sdh"><span class="tag">${word}</span>${esc(shortDate(date))}</h3>${dayBody(date, input, slots, idx)}</div>`;
+  return `<section class="soon" id="soon" aria-label="今日と明日">${day(input.today, "今日")}${day(tomorrow, "明日")}</section>`;
+}
+
 /** 日付が読めなかったカード。一番下にまとめる */
 function undatedHtml(cards: Card[], idx: Map<string, number>) {
   const list = cards.filter((c) => !c.date);
   if (list.length === 0) return "";
-  return `<section class="undated"><h2>日付が決まっていない予定</h2>${list.map((c) => cardHtml(c, false, idx)).join("")}</section>`;
+  return `<section class="undated"><h2>日にち未定の予定</h2>${list.map((c) => cardHtml(c, false, idx)).join("")}</section>`;
 }
 
 // 文字の大きさは html の font-size（rem の基準）で決める。17/18/22px。升の数字は 0.85rem（15px 以上）
@@ -374,6 +390,18 @@ main{padding:10px 12px 24px}
 .tdy{font-size:.8em;background:var(--ink);color:#fff;border-radius:999px;padding:1px 10px}
 .none{color:var(--sub);margin:4px 0}
 .hint{color:var(--sub);font-size:.85rem;margin:8px 0 0;text-align:center}
+/* 今日と明日：開いてすぐ見る所。月の升目より上 */
+.soon{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0 12px}
+.soon[hidden]{display:none}
+.sd{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 10px;min-width:0}
+.sd:first-child{border:2px solid var(--ink)}
+.sdh{display:flex;align-items:center;gap:6px;margin:0 0 4px;font-size:1rem}
+.sdh .tag{background:var(--ink);color:#fff;border-radius:999px;padding:1px 10px;font-size:.85rem}
+.sd:nth-child(2) .tag{background:var(--sub)}
+.sd .chips{margin:2px 0 4px}.sd .thumbs{display:none}
+@media (max-width:420px){.soon{grid-template-columns:1fr}}
+h2 small{font-weight:normal;color:var(--sub);font-size:.8rem;margin-left:8px}
+.nb{white-space:nowrap}
 /* 月：升目 */
 .mgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
 .mh{text-align:center;color:var(--sub);font-weight:bold;font-size:.8rem;padding:2px 0}
@@ -477,8 +505,10 @@ const JS = `
   var vbtns=document.querySelectorAll('.vw');
   var cur='month',curWeek=null;
   function weekEl(mon){return week.querySelector('.wk[data-week="'+mon+'"]')}
+  var soon=document.getElementById('soon');
   function showMonth(){
     cur='month';
+    if(soon)soon.hidden=false;
     month.classList.add('on');week.classList.remove('on');
     range.textContent=month.dataset.label;
     prev.href=month.dataset.prev;next.href=month.dataset.next;
@@ -489,6 +519,7 @@ const JS = `
     var w=weekEl(mon);
     if(!w){location.href=P.base+'?view=week&anchor='+mon;return}
     cur='week';curWeek=mon;
+    if(soon)soon.hidden=true;
     week.querySelectorAll('.wk').forEach(function(x){x.hidden=x!==w});
     week.querySelectorAll('.day.sel').forEach(function(d){d.classList.remove('sel')});
     month.classList.remove('on');week.classList.add('on');
@@ -553,14 +584,14 @@ export function renderCalendar(raw: CalendarInput): string {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <meta name="referrer" content="no-referrer">
-<title>${esc(family)}の予定</title>
+<title>${esc(family)}のだんどり帳</title>
 <script>${HEAD_JS}</script>
 <style>${CSS}</style>
 </head>
 <body>
 <header class="top">
   <div class="row row1">
-    <h1>${esc(family)}の予定</h1>
+    <h1>${esc(family)}の<span class="nb">だんどり帳</span></h1>
     <span class="grp" role="group" aria-label="文字の大きさ">
       <span class="lab" aria-hidden="true">あ</span>
       <button type="button" class="btn fs" data-fs="s" aria-pressed="false" aria-label="文字を小さく">小</button>
@@ -581,12 +612,25 @@ export function renderCalendar(raw: CalendarInput): string {
   ${legendHtml(idx)}
 </header>
 <main>
+${soonHtml(input, idx)}
 ${month}
 ${weekSec}
 ${undatedHtml(input.cards, idx)}
-${adventureHtml(input.adventure)}
+${adventureHtml(input.adventure, input.today)}
 ${growthHtml(input.photos, idx)}
 ${noticesHtml(input.photos)}
+<details class="howto">
+  <summary>だんどりさんへの頼み方（家族の LINE で）</summary>
+  <ul>
+    <li>📷 お便り・連絡アプリの画面を送る → 予定になって、ここに並ぶ（紙は捨ててOK）</li>
+    <li>🚗「明日のお迎え だれか」→ 家族の名前ボタン。先に押した人に決まる</li>
+    <li>🙋「5日の朝の送り 難しい」→ だんどりさんが家族に聞き直す</li>
+    <li>👉「ばあばに頼んで」「@名前 にお願いして」→ その人に名指しで聞く</li>
+    <li>🤒「熱で休み」→ 園・学校・習い事への文を［コピー］／［📞 電話］</li>
+    <li>🌱 写真を送って「思い出に入れておいて」→ 成長記録に残る</li>
+    <li>🙏 引き受けた人に［ありがとう］→ 日曜の夜に今週のカード</li>
+  </ul>
+</details>
 <details class="howto">
   <summary>Googleカレンダーに入れる</summary>
   <ol>
@@ -594,17 +638,7 @@ ${noticesHtml(input.photos)}
     <li>Googleカレンダーの「他のカレンダー」＋ →「URL で追加」に貼る</li>
   </ol>
   <code>${esc(icsUrl)}</code>
-  <p>この予定ページの URL は家族だけに。合言葉の代わりなので、ほかの人に送らないでください。</p>
-</details>
-<details class="howto">
-  <summary>だんどりさんの使い方（LINE で）</summary>
-  <ul>
-    <li>📷 お便りの写真を送る → 予定にして、ここに残る（紙は捨ててOK）</li>
-    <li>🚗 「お迎えを頼む」→ 日と時刻を選ぶ → 家族の名前ボタンで決まる</li>
-    <li>🤒 「休みの連絡」→ 子と理由を選ぶ → 園・学校・習い事への文を［コピー］</li>
-    <li>🙏 引き受けた人に［ありがとう］→ 日曜の夜に今週のカード</li>
-    <li>1対1のトークでは、下の「メニュー」から同じことができる</li>
-  </ul>
+  <p>このだんどり帳の URL は家族だけに。合言葉の代わりなので、ほかの人に送らないでください。</p>
 </details>
 </main>
 <div id="lb" role="dialog" aria-label="写真"><button type="button" class="btn close" aria-label="閉じる">閉じる</button><img alt=""><p></p></div>

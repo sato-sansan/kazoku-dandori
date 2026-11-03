@@ -16,6 +16,7 @@ import {
   deleteRichMenu,
   fetchImage,
   linkRichMenu,
+  memberName,
   mentionText,
   push,
   reply,
@@ -35,6 +36,7 @@ import {
   declineMessage,
   describeSlot,
   parseAccept,
+  parseDay,
   parseDecline,
   parseRequest,
   reminderMessage,
@@ -73,11 +75,14 @@ const MENU_BUTTONS: QuickButton[] = [
   { label: "❓ 使い方", text: "使い方" },
 ];
 const MENU_TEXT = "何をしますか？";
-const HOW_TO = `できること
+const HOW_TO = `だんどりさんへの頼み方
 📷 お便りの写真を送る → 予定にします（写真は残るので紙は捨ててOK）
-🤒「そうた 熱37.8 休み」→ 園・学校への連絡文
-🚗「明日17時のお迎え頼んでおいて」→ 代わりに聞きます
-📅「予定 見せて」→ 週・月のカレンダー（お便りの写真もここ）
+🤒「熱で休み」→ 園・学校への連絡文を［コピー］
+🚗「明日のお迎え だれか」→ 家族の名前ボタン
+🙋「5日の朝の送り 難しい」→ 家族に聞き直します
+👉「ばあばに頼んで」→ その人に名指しで聞きます
+🌱 写真＋「思い出に入れておいて」→ 成長記録に
+📅「予定 見せて」→ わが家のだんどり帳（月・週・今日と明日）
 🙏 引き受けた人に［ありがとう］
 1対1のトークでは、下の「メニュー」から同じことができます`;
 
@@ -293,6 +298,131 @@ export class Family extends DurableObject<Env> {
     return true;
   }
 
+  /**
+   * 「5日の朝の送り 難しい」で、その枠がまだ無い・決まっていないとき。枠を立てて家族に聞く。
+   * @名指しがあればその人に「お願いできますか？」。名指しの人の役が分かればその人のボタンだけ
+   */
+  private async askInsteadOf(
+    queued: QueuedEvent,
+    request: { date: string; time: string; kind: Slot["kind"] },
+    from: Adult,
+    toUserIds: string[],
+    today: string,
+  ) {
+    const slot = this.findOrCreateSlot(request.date, request.time, request.kind, "グループ");
+    if (slot.status === "決定" && slot.who && slot.who !== from) {
+      await this.send(queued, [{ type: "text", text: `${describeSlot(slot, today)}は、${slot.who}に決まっています。` }]);
+      return;
+    }
+    if (slot.status === "決定") {
+      this.sql.exec("UPDATE slots SET who = NULL, status = 'お願い中' WHERE id = ?", slot.id);
+      this.sql.exec("INSERT INTO events (at, kind, who, slot_id) VALUES (?, '取消', ?, ?)", Date.now(), from, slot.id);
+    } else {
+      this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = 'グループ' WHERE id = ?", slot.id);
+    }
+    const open = { ...slot, who: null, status: "お願い中" as const };
+    // ボタンは頼んだ人以外の全員。名指しの人が無理でも、ほかの人が押せる
+    const ask = askMessage(open, { exclude: from });
+    if (toUserIds.length > 0) {
+      await this.askGroup(queued, [mentionText(toUserIds, `${describeSlot(slot, today)}、お願いできますか？`), ask]);
+    } else {
+      await this.askGroup(queued, [declineMessage(from), ask]);
+    }
+  }
+
+  /** 「ママに頼んで」「さくらに依頼して」「@ばあば にお願いして」：相手を決めて、名指しで聞く。相手が分からなければ名前ボタン */
+  private async delegate(queued: QueuedEvent, plain: string, mentioned: string[], today: string) {
+    const userId = queued.event.source.userId;
+    const from = this.roleOf(userId);
+    // 相手：①本文の「ママ」などの呼び名 ②@名指しの人 ③LINE の表示名（「さくらに」）
+    let role: Adult | null = ADULTS.find((a) => new RegExp(`${a}(さん)?[\\s　]*(に|へ)`).test(plain)) ?? null;
+    let ids = mentioned;
+    if (!role) role = mentioned.map((id) => this.roleOf(id)).find((r): r is Adult => !!r) ?? null;
+    const name = /^(?:.*?[、。\s　])?([^、。\s　]+?)(?:さん|ちゃん|くん)?[\s　]*(?:に|へ)[\s　]*(?:頼|たの|依頼|お願い|聞|きい|任|まか)/.exec(plain)?.[1];
+    if (!role && ids.length === 0 && name) {
+      const hit = await this.memberByName(queued.familyId, name, userId);
+      if (hit) {
+        role = hit.role;
+        ids = [hit.userId];
+      }
+    }
+    if (role && role === from) role = null;
+    if (ids.length === 0 && role) ids = this.userIdsOf(role).filter((id) => id !== userId);
+    if (!role && ids.length === 0) {
+      await this.send(queued, [
+        withButtons(
+          `${name ? `「${name}」さんは、パパ・ママ・じいじ・ばあばのどなたですか？` : "どなたに頼みますか？"}`,
+          ADULTS.filter((a) => a !== from).map((a) => ({ label: a, text: `${a}に頼んで` })),
+        ),
+      ]);
+      return;
+    }
+    // 何を頼むか：文に送り迎えがあればその枠、無ければ一番近い決まっていない枠
+    const request = parseRequest(plain, today, { loose: true });
+    const slot = request ? this.findOrCreateSlot(request.date, request.time, request.kind, "グループ") : this.nearestOpenSlot(today);
+    if (!slot) {
+      await this.send(queued, [
+        { type: "text", text: "何を頼むのか分かりませんでした。「5日の朝の送り ママに頼んで」のように教えてください。" },
+      ]);
+      return;
+    }
+    if (slot.status === "決定" && slot.who && slot.who === role) {
+      await this.send(queued, [{ type: "text", text: `${describeSlot(slot, today)}は、もう${role}に決まっています。` }]);
+      return;
+    }
+    if (slot.status === "決定" && slot.who) {
+      // 担当を手放して、頼む相手に渡す
+      this.sql.exec("UPDATE slots SET who = NULL, status = 'お願い中' WHERE id = ?", slot.id);
+      this.sql.exec("INSERT INTO events (at, kind, who, slot_id) VALUES (?, '取消', ?, ?)", Date.now(), slot.who, slot.id);
+    } else {
+      this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = 'グループ' WHERE id = ?", slot.id);
+    }
+    const open = { ...slot, who: null, status: "お願い中" as const };
+    const line = `${describeSlot(slot, today)}、お願いできますか？`;
+    const head: OutMessage = ids.length > 0 ? mentionText(ids, line) : { type: "text", text: `${role}、${line}` };
+    await this.askGroup(queued, [head, askMessage(open, { exclude: from ?? undefined })]);
+  }
+
+  private userIdsOf(role: Adult): string[] {
+    return this.sql
+      .exec<{ user_id: string }>("SELECT user_id FROM members WHERE role = ?", role)
+      .toArray()
+      .map((m) => m.user_id);
+  }
+
+  /** 「さくら」→ 名簿のだれか。LINE の表示名で探す（名前は家族の箱にだけ覚える。ログに出さない） */
+  private async memberByName(familyId: string, name: string, self?: string): Promise<{ userId: string; role: Adult } | null> {
+    const want = name.replace(/[\s　]/g, "");
+    if (!want) return null;
+    const members = this.sql.exec<{ user_id: string; role: string }>("SELECT user_id, role FROM members").toArray();
+    for (const m of members) {
+      if (m.user_id === self) continue;
+      const key = `name.${m.user_id}`;
+      let display: string | null = this.sql.exec<{ value: string }>("SELECT value FROM settings WHERE key = ?", key).toArray()[0]?.value ?? null;
+      if (!display) {
+        display = await memberName(this.env.LINE_CHANNEL_ACCESS_TOKEN, familyId, m.user_id).catch(() => null);
+        if (display) this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", key, display);
+      }
+      const d = (display ?? "").replace(/[\s　]/g, "");
+      if (d && (d.includes(want) || want.includes(d))) return { userId: m.user_id, role: m.role as Adult };
+    }
+    return null;
+  }
+
+  /** 一番近い決まっていない枠。いま家族に聞いている枠を先に。過ぎた枠は除く */
+  private nearestOpenSlot(today: string): Slot | null {
+    const row = this.sql
+      .exec<SlotRow>(
+        `SELECT * FROM slots WHERE status != '決定' AND (date > ? OR (date = ? AND time >= ?))
+         ORDER BY (status = 'お願い中') DESC, date, time LIMIT 1`,
+        today,
+        today,
+        jstTime(),
+      )
+      .toArray()[0];
+    return row ? toSlot(row) : null;
+  }
+
   /** 家族に聞く文。グループで言われたならそのまま返事、1対1ならグループへ流して本人には「聞きました」 */
   private async askGroup(queued: QueuedEvent, messages: OutMessage[]) {
     if (queued.event.source.type !== "user") {
@@ -429,14 +559,14 @@ export class Family extends DurableObject<Env> {
     }
 
     // 「予定 見せて」「カレンダー」→ 合言葉つきの URL（ログインなし）
-    if (/^(予定|カレンダー)[\s　]*(見せて|みせて|教えて|おしえて|を見る)?$/.test(text)) {
+    if (/^(予定|カレンダー|だんどり帳)[\s　]*(見せて|みせて|教えて|おしえて|を見る|開いて)?$/.test(text)) {
       const token = await this.calendarToken(queued.familyId);
       const base = `https://kazoku-dandori.dandori.workers.dev/c/${token}`;
       // URL は見せず、ボタンで開く。Google カレンダー用の購読 URL はコピーで渡す
       await this.send(queued, [
         {
           type: "flex",
-          altText: "わが家の予定（週・月）",
+          altText: "わが家のだんどり帳（今日と明日・月・週）",
           contents: {
             type: "bubble",
             size: "kilo",
@@ -446,9 +576,9 @@ export class Family extends DurableObject<Env> {
               spacing: "sm",
               paddingAll: "12px",
               contents: [
-                { type: "text", text: "わが家の予定", weight: "bold", size: "md" },
-                { type: "text", text: "家族だけのページです。外に送らないでください。", size: "xs", color: "#666666", wrap: true },
-                { type: "button", style: "primary", height: "sm", action: { type: "uri", label: "📅 カレンダーを開く", uri: base } },
+                { type: "text", text: "わが家のだんどり帳", weight: "bold", size: "md" },
+                { type: "text", text: "家族だけのページです。ほかの人に送らないでください。", size: "xs", color: "#666666", wrap: true },
+                { type: "button", style: "primary", height: "sm", action: { type: "uri", label: "📒 だんどり帳を開く", uri: base } },
                 {
                   type: "button",
                   style: "secondary",
@@ -470,6 +600,21 @@ export class Family extends DurableObject<Env> {
     }
     if (/^段取り[\s：:]*冒険$/.test(text)) {
       await this.sendWeeklyCard();
+      return;
+    }
+
+    // 「ママに頼んで」「@ばあば にお願いして」「5日の朝の送り じいじに依頼して」→ その人に名指しで聞く
+    // 雑談の「先生にお願いして」は拾わない：だんどりさんを呼んだ・@名指しがある・家族の呼び名・送り迎えの話のどれかのときだけ
+    const plain = stripMentions(queued.event).trim();
+    const mentioned = mentionedUserIds(queued.event).filter((id) => id !== userId);
+    const asksSomeone =
+      /(に|へ)[\s　]*(頼ん|たのん|頼み|たのみ|依頼|お願い|聞いて|きいて|任せ|まかせ)/.test(plain) ||
+      (mentioned.length > 0 && /頼ん|たのん|依頼|お願い/.test(plain));
+    if (
+      asksSomeone &&
+      (isPrivate || botMentioned(queued.event) || mentioned.length > 0 || ADULTS.some((a) => plain.includes(a)) || parseRequest(plain, today))
+    ) {
+      await this.delegate(queued, plain, mentioned, today);
       return;
     }
 
@@ -501,9 +646,10 @@ export class Family extends DurableObject<Env> {
         return;
       }
       // 「明日のお迎え無理」なら明日の迎えだけ。日や種類が書いてなければ、本人の枠が1つのときだけ取り消す
-      const mine = this.slotsOf([today, addDays(today, 1)]).filter((s) => s.status === "決定" && s.who === role);
-      const hint = parseRequest(text, today);
-      const matched = hint ? mine.filter((s) => s.kind === hint.kind && (/今日|きょう|明日|あした/.test(text) ? s.date === hint.date : true)) : mine;
+      const hint = parseRequest(text, today, { loose: true });
+      const day = parseDay(text, today);
+      const mine = this.slotsOf(day ? [day] : [today, addDays(today, 1)]).filter((s) => s.status === "決定" && s.who === role);
+      const matched = hint ? mine.filter((s) => s.kind === hint.kind && (day ? s.date === hint.date : true)) : mine;
       const slot = matched.length === 1 ? matched[0] : null;
       if (!slot) {
         if (matched.length > 1) {
@@ -513,8 +659,13 @@ export class Family extends DurableObject<Env> {
               matched.slice(0, 4).map((s) => ({ label: describeSlot(s, today).slice(0, 20), text: `${describeSlot(s, today)} 無理` })),
             ),
           ]);
+        } else if (hint) {
+          // 「5日の朝の送り 難しい」：まだ決まっていない日でも、枠を立てて家族に聞く。@名指しがあればその人へ
+          await this.askInsteadOf(queued, hint, role, mentionedUserIds(queued.event).filter((id) => id !== userId), today);
         } else {
-          await this.send(queued, [{ type: "text", text: "分かりました。" }]);
+          await this.send(queued, [
+            { type: "text", text: "どの送り迎えのことか分かりませんでした。「5日の朝の送り 難しい」のように教えてください。" },
+          ]);
         }
         return;
       }
@@ -688,8 +839,8 @@ export class Family extends DurableObject<Env> {
       {
         type: "text",
         text: growth
-          ? `成長記録に残しました（${label}）。家のページの「成長記録」に並びます。`
-          : "思い出に残しました。家のページの「成長記録」と今日の日付から見られます。",
+          ? `成長記録に残しました（${label}）。だんどり帳の「成長記録」に並びます。`
+          : "思い出に残しました。だんどり帳の「成長記録」に並びます。",
       },
     ]);
   }
@@ -1178,6 +1329,26 @@ export class Family extends DurableObject<Env> {
 function isWeekend(date: string) {
   const day = jstWeekday(date);
   return day === 0 || day === 6;
+}
+
+/** 本文で @名指しされた人（だんどりさん自身は除く） */
+function mentionedUserIds(event: LineEvent): string[] {
+  return (event.message?.mention?.mentionees ?? [])
+    .filter((m) => !m.isSelf && m.userId)
+    .map((m) => m.userId as string);
+}
+
+/** だんどりさん自身が @名指しされたか */
+function botMentioned(event: LineEvent): boolean {
+  return (event.message?.mention?.mentionees ?? []).some((m) => m.isSelf) || /@だんどりさん/.test(event.message?.text ?? "");
+}
+
+/** 本文から @名指しの部分を取り除く（「さくらに依頼して @だんどりさん」→「さくらに依頼して」） */
+function stripMentions(event: LineEvent): string {
+  let text = event.message?.text ?? "";
+  const spans = [...(event.message?.mention?.mentionees ?? [])].sort((a, b) => b.index - a.index);
+  for (const s of spans) text = text.slice(0, s.index) + text.slice(s.index + s.length);
+  return text.replace(/@だんどりさん/g, "");
 }
 
 /** グループでの急なお迎えの頼み。「お迎え」＋急ぎ・呼びかけの言葉。引受のボタン文は除く */

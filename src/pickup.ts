@@ -200,12 +200,52 @@ function toHalfWidth(text: string) {
 }
 
 /** 「明日17時のお迎え頼んでおいて」のような1対1の頼みを解く。日付は today（YYYY-MM-DD、JST）基準で「明日」「あした」「今日」を解釈。時刻がなければ 17:30。合わなければ null */
-export function parseRequest(text: string, today: string): { date: string; time: string; kind: "送り" | "迎え" } | null {
+/** 「今日」「明日」「明後日」「5日」「11/5」「11月5日」を日付に。日の言葉が無ければ null */
+export function parseDay(text: string, today: string): string | null {
   const t = toHalfWidth(text);
-  const kind: "送り" | "迎え" | null = /迎え|むかえ/.test(t) ? "迎え" : /送り|おくり/.test(t) ? "送り" : null;
+  if (/今日|きょう/.test(t)) return today;
+  if (/明後日|あさって/.test(t)) return addDays(today, 2);
+  if (/明日|あした/.test(t)) return addDays(today, 1);
+  const [y, m0, d0] = today.split("-").map(Number);
+  const iso = (yy: number, mm: number, dd: number) => `${yy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+  const md = /(\d{1,2})[/月](\d{1,2})日?/.exec(t);
+  if (md) {
+    const m = Number(md[1]);
+    const d = Number(md[2]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return iso(m < m0 ? y + 1 : y, m, d);
+  }
+  // 「5日」：今月のその日。もう過ぎていれば来月
+  const dd = /(?:^|[^\d/:])(\d{1,2})日(?![\d:])/.exec(t);
+  if (dd) {
+    const d = Number(dd[1]);
+    if (d >= 1 && d <= 31) {
+      if (d >= d0) return iso(y, m0, d);
+      return m0 === 12 ? iso(y + 1, 1, d) : iso(y, m0 + 1, d);
+    }
+  }
+  return null;
+}
+
+export function parseRequest(
+  text: string,
+  today: string,
+  options?: { loose?: boolean },
+): { date: string; time: string; kind: "送り" | "迎え" } | null {
+  const t = toHalfWidth(text);
+  // loose（断る・頼むと分かっている文だけ）：「朝」だけなら送り、「夕方」「帰り」だけなら迎え。
+  // 1対1の「明日の朝、雨だって」を頼みにしないため、ふだんは「送り」「迎え」の言葉が要る
+  const kind: "送り" | "迎え" | null = /迎え|むかえ/.test(t)
+    ? "迎え"
+    : /送り|おくり/.test(t)
+      ? "送り"
+      : options?.loose && /夕方|帰り/.test(t)
+        ? "迎え"
+        : options?.loose && /朝/.test(t)
+          ? "送り"
+          : null;
   if (!kind) return null;
   // 日の言葉がなければ明日。1対1で頼むのはほぼ前の晩
-  const date = /今日|きょう/.test(t) ? today : /明後日|あさって/.test(t) ? addDays(today, 2) : addDays(today, 1);
+  const date = parseDay(t, today) ?? addDays(today, 1);
   const m = /(\d{1,2})(?::(\d{2})|時(半|(\d{1,2})分)?)/.exec(t);
   let time = kind === "迎え" ? EVENING : MORNING;
   if (m) {

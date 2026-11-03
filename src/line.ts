@@ -11,7 +11,13 @@ export interface LineEvent {
   webhookEventId: string;
   replyToken?: string;
   source: { type: "user" | "group" | "room"; userId?: string; groupId?: string; roomId?: string };
-  message?: { id: string; type: string; text?: string };
+  message?: {
+    id: string;
+    type: string;
+    text?: string;
+    /** 本文の @名指し。isSelf はだんどりさん自身 */
+    mention?: { mentionees: { index: number; length: number; type?: string; userId?: string; isSelf?: boolean }[] };
+  };
   unsend?: { messageId: string };
   /** memberJoined：グループに入った人たち */
   joined?: { members: { type: string; userId?: string }[] };
@@ -122,6 +128,17 @@ export async function reply(token: string, replyToken: string, messages: OutMess
   // 失敗の理由は LINE の返事に出る（本文は含まれない）
   if (!res.ok) console.error("line reply failed", res.status, (await res.text()).slice(0, 300));
   return res.ok;
+}
+
+/** グループ（またはトークルーム）の中での表示名。「さくらに頼んで」の「さくら」がだれかを知るためだけに使う */
+export async function memberName(token: string, chatId: string, userId: string): Promise<string | null> {
+  const kind = chatId.startsWith("R") ? "room" : "group";
+  const res = await fetch(`https://api.line.me/v2/bot/${kind}/${chatId}/member/${userId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const body = (await res.json()) as { displayName?: string };
+  return body.displayName ?? null;
 }
 
 /** プッシュ（通数を使う）。返信できなかったときと定時のお知らせだけ */

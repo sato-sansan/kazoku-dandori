@@ -204,7 +204,7 @@ const COLOR = {
 };
 
 /** 季節の絵文字を1つ。11月は🍁 */
-function seasonEmoji(month: number) {
+export function seasonEmoji(month: number) {
   if (month >= 3 && month <= 5) return "🌸";
   if (month >= 6 && month <= 8) return "🌻";
   if (month >= 9 && month <= 11) return "🍁";
@@ -253,7 +253,7 @@ export function weeklyCard(stats: AdventureStats, reward?: string, now: number =
       : `今週 ${stats.thanks}回（先週 ${stats.thanks - stats.thanksDelta}回）`;
 
   const body: Record<string, unknown>[] = [
-    label(`家族の経験値 ${stats.xp}`),
+    label(`わが家の経験値 ${stats.xp}`),
     text(levelLine, { weight: "bold" }),
     gauge(percent),
     separator(),
@@ -294,7 +294,7 @@ export function weeklyCard(stats: AdventureStats, reward?: string, now: number =
   body.push(separator(), label("次のごほうび"), text(reward?.trim() || "家族で決めてね"));
 
   const altText = [
-    `${emoji} 家族の冒険 ${stats.weekLabel}`,
+    `${emoji} わが家の冒険 ${stats.weekLabel}`,
     stats.levelName,
     stats.finePlay ? `ファインプレー：${stats.finePlay.who} ${stats.finePlay.note}` : "今週はみんなで段取りできました",
     `ありがとう ${stats.thanks}回`,
@@ -314,7 +314,7 @@ export function weeklyCard(stats: AdventureStats, reward?: string, now: number =
         backgroundColor: COLOR.header,
         paddingAll: "16px",
         contents: [
-          text(`${emoji} 家族の冒険 ${stats.weekLabel}`, { size: "sm", color: COLOR.headerSub }),
+          text(`${emoji} わが家の冒険 ${stats.weekLabel}`, { size: "sm", color: COLOR.headerSub }),
           text(stats.levelName, { size: "xl", weight: "bold", color: "#FFFFFF" }),
         ],
       },
