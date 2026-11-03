@@ -207,7 +207,11 @@ export function parseDay(text: string, today: string): string | null {
   if (/明後日|あさって/.test(t)) return addDays(today, 2);
   if (/明日|あした/.test(t)) return addDays(today, 1);
   const [y, m0, d0] = today.split("-").map(Number);
-  const iso = (yy: number, mm: number, dd: number) => `${yy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+  // 「11月31日」のような無い日は null（枠を作らない）
+  const iso = (yy: number, mm: number, dd: number) => {
+    const s = `${yy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    return new Date(Date.UTC(yy, mm - 1, dd)).toISOString().slice(0, 10) === s ? s : null;
+  };
   const md = /(\d{1,2})[/月](\d{1,2})日?/.exec(t);
   if (md) {
     const m = Number(md[1]);
@@ -219,7 +223,7 @@ export function parseDay(text: string, today: string): string | null {
   if (dd) {
     const d = Number(dd[1]);
     if (d >= 1 && d <= 31) {
-      if (d >= d0) return iso(y, m0, d);
+      if (d >= d0) return iso(y, m0, d) ?? (m0 === 12 ? iso(y + 1, 1, d) : iso(y, m0 + 1, d));
       return m0 === 12 ? iso(y + 1, 1, d) : iso(y, m0 + 1, d);
     }
   }

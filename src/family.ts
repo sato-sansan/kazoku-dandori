@@ -359,6 +359,11 @@ export class Family extends DurableObject<Env> {
     }
     // 何を頼むか：文に送り迎えがあればその枠、無ければ一番近い決まっていない枠
     const request = parseRequest(plain, today, { loose: true });
+    // 「今すぐお迎え ばあばにお願い」は今日の今の時刻（1対1の頼みと同じ扱い）
+    if (request && /今すぐ|今から|至急|すぐ/.test(plain)) {
+      request.date = today;
+      request.time = jstTime();
+    }
     const slot = request ? this.findOrCreateSlot(request.date, request.time, request.kind, "グループ") : this.nearestOpenSlot(today);
     if (!slot) {
       await this.send(queued, [
@@ -366,12 +371,13 @@ export class Family extends DurableObject<Env> {
       ]);
       return;
     }
-    if (slot.status === "決定" && slot.who && slot.who === role) {
-      await this.send(queued, [{ type: "text", text: `${describeSlot(slot, today)}は、もう${role}に決まっています。` }]);
+    // ほかの人に決まっている枠は、本人に聞かずに外さない。手放せるのは自分の担当だけ
+    if (slot.status === "決定" && slot.who && slot.who !== from) {
+      await this.send(queued, [{ type: "text", text: `${describeSlot(slot, today)}は、もう${slot.who}に決まっています。` }]);
       return;
     }
     if (slot.status === "決定" && slot.who) {
-      // 担当を手放して、頼む相手に渡す
+      // 自分の担当を手放して、頼む相手に渡す
       this.sql.exec("UPDATE slots SET who = NULL, status = 'お願い中' WHERE id = ?", slot.id);
       this.sql.exec("INSERT INTO events (at, kind, who, slot_id) VALUES (?, '取消', ?, ?)", Date.now(), slot.who, slot.id);
     } else {
