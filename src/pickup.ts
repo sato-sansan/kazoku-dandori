@@ -184,6 +184,26 @@ export function declineMessage(who: Adult): TextMessage {
 }
 
 /** 念押し（出る30分前）。担当の名前を文頭に */
+/**
+ * 前の晩 19:00 に、明日の持ち物・集金・締切を1通で。送迎の聞き取りと同じ1回のお知らせに入れる（送信数を増やさない）。
+ * 何も無ければ null
+ */
+export function itemsMessage(cards: Card[], date: string): TextMessage | null {
+  const who = (c: Card) => (c.child && c.child !== "全員" ? c.child : "みんな");
+  const lines: string[] = [];
+  for (const c of cards.filter((c) => c.date === date && (c.items.length > 0 || c.money))) {
+    const rest = c.items.filter((i) => i !== c.title);
+    const things = rest.length > 0 ? `（${rest.join("・")}）` : "";
+    const money = c.money ? ` ${c.money.toLocaleString("ja-JP")}円` : "";
+    lines.push(`・${who(c)}：${c.title}${things}${money}`);
+  }
+  for (const c of cards.filter((c) => c.deadline === date && c.date !== date)) {
+    lines.push(`・${who(c)}：${c.title} の締切${c.money ? `（${c.money.toLocaleString("ja-JP")}円）` : ""}`);
+  }
+  if (lines.length === 0) return null;
+  return { type: "text", text: [`🎒 ${shortDate(date)}の持ち物・集金`, ...lines.slice(0, 8)].join("\n") };
+}
+
 export function reminderMessage(slot: Slot): TextMessage {
   const head = slot.who ? `${slot.who}、` : "";
   return { type: "text", text: `${head}${slot.time} ${whose(slot)}の${kindWord(slot.kind)}です。よろしくお願いします。` };

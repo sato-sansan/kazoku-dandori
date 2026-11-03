@@ -16,10 +16,12 @@ import {
   createRichMenu,
   deleteRichMenu,
   fetchImage,
+  chatMemberCount,
   linkRichMenu,
   memberName,
   mentionText,
   push,
+  pushRemaining,
   reply,
   uploadRichMenuImage,
   withButtons,
@@ -35,6 +37,7 @@ import {
   confirmMessages,
   dailySlots,
   declineMessage,
+  itemsMessage,
   describeSlot,
   parseAccept,
   parseDay,
@@ -55,6 +58,8 @@ const SEEN_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
 const ASK_EVENING = "19:00";
 const ASK_MORNING = "07:00";
 const REMIND_BEFORE_MS = 30 * 60 * 1000;
+/** 定時のお知らせは、今月の送信数がこれだけ残るところで止める（家族が頼んだときのぶん。4人なら3回） */
+const PUSH_RESERVE = 12;
 
 const GREETING = `だんどりさんです。家族の段取りを手伝います。
 お便りの写真や「熱で休み」の一言を読んで、予定と連絡文にします。外へは勝手に送りません。
@@ -166,6 +171,7 @@ export class Family extends DurableObject<Env> {
       );
       CREATE TABLE IF NOT EXISTS recent_images (message_id TEXT PRIMARY KEY, received_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS flows (user_id TEXT PRIMARY KEY, step TEXT NOT NULL, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS counts (day TEXT NOT NULL, key TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (day, key));
     `);
   }
 
@@ -265,8 +271,11 @@ export class Family extends DurableObject<Env> {
       const saved = await this.read(queued, { image }, "写真");
       // お便りなら写真を残す。紙を捨てられるように
       if (saved) await this.savePhoto(queued.familyId, event.message.id, image, saved.date, saved.label, "お便り");
+      if (saved) this.count("読んだお便り");
     } else if (event.type === "message" && event.message?.type === "text") {
       const text = (event.message.text ?? "").trim();
+      // 提出用の数字：グループで大人が打った文の数（中身は持たない）。ボタンが送る文は別に数える
+      if (!isPrivate) this.count(isButtonText(text) ? "ボタン" : "手で打った文");
       // 1対1は名簿にいる大人だけ。中身の扱いはグループと同じで、家族に聞くことだけグループへ流す
       if (isPrivate && !this.roleOf(event.source.userId)) {
         await this.send(queued, [{ type: "text", text: "家族のグループで、まず「わたしは ○○」を送ってください。" }]);
@@ -438,7 +447,12 @@ export class Family extends DurableObject<Env> {
       await this.send(queued, messages);
       return;
     }
-    await this.pushToGroup(messages);
+    if (!(await this.pushToGroup(messages))) {
+      await this.send(queued, [
+        { type: "text", text: "今月の LINE の送信数が足りず、グループに送れませんでした。グループで「お迎えを頼む」を押してください。" },
+      ]);
+      return;
+    }
     await this.send(queued, [{ type: "text", text: "グループで聞きました。グループを見ていてください。" }]);
   }
 
@@ -609,11 +623,15 @@ export class Family extends DurableObject<Env> {
 
     // デモと確認用：「段取り 明日」で19:00の処理を今やる、「段取り 冒険」で日曜のカードを今出す
     if (/^段取り[\s：:]*明日$/.test(text)) {
-      await this.askForDate(addDays(today, 1), false);
+      await this.askForDate(addDays(today, 1), false, queued);
+      return;
+    }
+    if (/^段取り[\s：:]*数字$/.test(text)) {
+      await this.send(queued, [{ type: "text", text: this.numbersText() }]);
       return;
     }
     if (/^段取り[\s：:]*冒険$/.test(text)) {
-      await this.sendWeeklyCard();
+      await this.sendWeeklyCard(queued);
       return;
     }
 
@@ -726,6 +744,7 @@ export class Family extends DurableObject<Env> {
       today,
     });
     console.log(JSON.stringify({ step: "absence", attends: draft.attends, ask: !!draft.ask }));
+    this.count("連絡文の下書き");
     await this.send(queued, absenceMessages(draft, this.profile().contacts));
   }
 
@@ -754,6 +773,7 @@ export class Family extends DurableObject<Env> {
     }
     // 中身は記録しない。形だけ
     console.log(JSON.stringify({ step: "intent", intent: r?.intent ?? null, date: !!r?.date, kind: r?.kind ?? null, person: !!r?.person }));
+    this.count("聞き分け");
     if (!r) return false;
 
     const md = r.date ? `${Number(r.date.slice(5, 7))}/${Number(r.date.slice(8, 10))}の` : "";
@@ -1073,8 +1093,11 @@ export class Family extends DurableObject<Env> {
     await this.send(queued, [{ type: "text", text: `${target.who}に、${from}からのありがとうが届きました 🙏` }]);
   }
 
-  /** その日の未定の枠をグループに聞く（19:00 と、翌朝7:00 の2回まで） */
-  private async askForDate(date: string, retry: boolean) {
+  /**
+   * その日の未定の枠をグループに聞く（19:00 と、翌朝7:00 の2回まで）。19:00 は明日の持ち物・集金も同じ1回に入れる。
+   * queued があれば（「段取り 明日」と言われた）返信で出す。返信は LINE の送信数を使わない
+   */
+  private async askForDate(date: string, retry: boolean, queued?: QueuedEvent) {
     const profile = this.profile();
     // 土日は保育所の送迎がない。お便り由来の枠（行事・習い事）だけ
     if (!isWeekend(date)) this.upsertSlots(dailySlots(profile, date));
@@ -1082,14 +1105,26 @@ export class Family extends DurableObject<Env> {
     this.upsertSlots(slotsFromCards(cards, date));
 
     const open = this.slotsOf([date]).filter((s) => s.status === "未定" || (retry && s.status === "お願い中"));
-    if (open.length === 0) return;
+    const items = retry ? null : itemsMessage(cards, date);
+    if (open.length === 0 && !items) {
+      if (queued) await this.send(queued, [{ type: "text", text: "明日の送り迎えは、全部決まっています。" }]);
+      return;
+    }
+    // 自動のお知らせは、今月の送信数が少なければ送らない（家族が頼んだときのぶんを残す）。印も付けない
+    if (!queued && !(await this.pushAllowed(true))) return;
     // 先に印と予約を済ませてから送る。送信が1回失敗しても、朝の聞き直しと念押しは残る
     for (const slot of open) this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = COALESCE(requested_by, '自動') WHERE id = ?", slot.id);
-    if (!retry) this.addJob(jstToMs(date, ASK_MORNING), "ask_morning", date);
+    if (!retry && open.length > 0) this.addJob(jstToMs(date, ASK_MORNING), "ask_morning", date);
     for (const slot of open) this.addJob(jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS, "reminder", String(slot.id));
+    const messages: OutMessage[] = [...open.map((slot) => askMessage(slot, { retry })), ...(items ? [items] : [])];
+    if (queued) {
+      // 返信は1回だけ（5通まで）。6件以上は最初の5件
+      await this.send(queued, messages.slice(0, 5));
+      return;
+    }
     // 1回の push は5通まで。6件以上なら分けて送る
-    for (let i = 0; i < open.length; i += 5) {
-      await this.pushToGroup(open.slice(i, i + 5).map((slot) => askMessage(slot, { retry })));
+    for (let i = 0; i < messages.length; i += 5) {
+      await this.pushToGroup(messages.slice(i, i + 5), true);
     }
   }
 
@@ -1114,9 +1149,66 @@ export class Family extends DurableObject<Env> {
     return { stats: this.stats(), takes: [...takes].map(([who, count]) => ({ who, count })) };
   }
 
-  private async sendWeeklyCard() {
+  /** 提出用の数字を1日ぶん足す（文の中身は持たない） */
+  private count(key: string, n = 1) {
+    this.sql.exec(
+      "INSERT INTO counts (day, key, n) VALUES (?, ?, ?) ON CONFLICT (day, key) DO UPDATE SET n = n + excluded.n",
+      jstDate(),
+      key,
+      n,
+    );
+  }
+
+  /** 「段取り 数字」：今週と先週の数。提出の「使ってみた前後」に、確かめられた数字だけを書くため */
+  private numbersText(): string {
+    const { start } = weekRange();
+    const monday = jstDate(start);
+    const week = (from: string) => {
+      const to = addDays(from, 7);
+      const sum = (key: string) =>
+        Number(this.sql.exec<{ n: number }>("SELECT COALESCE(SUM(n), 0) AS n FROM counts WHERE key = ? AND day >= ? AND day < ?", key, from, to).toArray()[0]?.n ?? 0);
+      const slots = this.sql
+        .exec<{ status: string; n: number }>("SELECT status, COUNT(*) AS n FROM slots WHERE date >= ? AND date < ? GROUP BY status", from, to)
+        .toArray();
+      const decided = slots.filter((r) => r.status === "決定").reduce((a, r) => a + Number(r.n), 0);
+      const open = slots.filter((r) => r.status === "未定" || r.status === "お願い中").reduce((a, r) => a + Number(r.n), 0);
+      const fromMs = jstToMs(from, "00:00");
+      const ev = (kind: string) =>
+        Number(this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM events WHERE kind = ? AND at >= ? AND at < ?", kind, fromMs, fromMs + 7 * 86_400_000).toArray()[0]?.n ?? 0);
+      return {
+        typed: sum("手で打った文"),
+        buttons: sum("ボタン"),
+        decided,
+        open,
+        takes: ev("引受") + ev("急な引受"),
+        thanks: ev("ありがとう"),
+        drafts: sum("連絡文の下書き"),
+        notices: sum("読んだお便り"),
+        routed: sum("聞き分け"),
+      };
+    };
+    const now = week(monday);
+    const prev = week(addDays(monday, -7));
+    const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+    return [
+      `📊 今週（${md(monday)}〜${md(addDays(monday, 6))}）の数字`,
+      `手で打った文：${now.typed}通（ボタン ${now.buttons}回は別）`,
+      `送迎：決まった ${now.decided}件・まだ ${now.open}件（名前ボタンで引き受け ${now.takes}回）`,
+      `ありがとう：${now.thanks}回`,
+      `連絡文の下書き：${now.drafts}回`,
+      `読んだお便り：${now.notices}件`,
+      `だんどりさんへの呼びかけ（聞き分け）：${now.routed}回`,
+      `先週：手で打った文 ${prev.typed}通・決まった送迎 ${prev.decided}件・ありがとう ${prev.thanks}回`,
+      "数えているのは数だけです。文の中身は残していません。",
+    ].join("\n");
+  }
+
+  /** 日曜 20:00 の冒険カード。「段取り 冒険」と言われたら返信で出す（送信数を使わない） */
+  private async sendWeeklyCard(queued?: QueuedEvent) {
     const reward = this.sql.exec("SELECT value FROM settings WHERE key = 'reward'").toArray()[0]?.value as string | undefined;
-    await this.pushToGroup([weeklyCard(this.stats(), reward)]);
+    const card = weeklyCard(this.stats(), reward);
+    if (queued) await this.send(queued, [card]);
+    else await this.pushToGroup([card], true);
   }
 
   // ── 定時の仕事（Cron は使わず、DO のアラームで） ───────────
@@ -1159,7 +1251,7 @@ export class Family extends DurableObject<Env> {
     else if (type === "reminder") {
       const slot = this.slotById(Number(payload));
       if (!slot) return;
-      await this.pushToGroup([slot.status === "決定" ? reminderMessage(slot) : undecidedMessage(slot)]);
+      await this.pushToGroup([slot.status === "決定" ? reminderMessage(slot) : undecidedMessage(slot)], true);
     } else if (type === "weekly_card") await this.sendWeeklyCard();
   }
 
@@ -1423,10 +1515,35 @@ export class Family extends DurableObject<Env> {
     return row ? toSlot(row) : null;
   }
 
-  private async pushToGroup(messages: OutMessage[]) {
+  /**
+   * グループへのプッシュ（LINE の送信数を「人数ぶん」使う）。auto は定時のお知らせ。
+   * 送れなかった（数が足りない）ら false
+   */
+  private async pushToGroup(messages: OutMessage[], auto = false): Promise<boolean> {
     const familyId = this.familyId();
-    if (!familyId) return;
+    if (!familyId) return false;
+    if (!(await this.pushAllowed(auto))) return false;
     await push(this.env.LINE_CHANNEL_ACCESS_TOKEN, familyId, messages.slice(0, 5));
+    return true;
+  }
+
+  /**
+   * 今月の残りで送ってよいか。定時のお知らせ（auto）は PUSH_RESERVE 通を残して止める。
+   * 家族が頼んだとき（1対1→グループ）は、人数ぶん残っていれば送る。残りが取れなければ止めない
+   */
+  private async pushAllowed(auto: boolean): Promise<boolean> {
+    const familyId = this.familyId();
+    if (!familyId) return false;
+    const token = this.env.LINE_CHANNEL_ACCESS_TOKEN;
+    const [remaining, members] = await Promise.all([
+      pushRemaining(token).catch(() => null),
+      chatMemberCount(token, familyId).catch(() => null),
+    ]);
+    if (remaining === null) return true;
+    const need = members ?? ADULTS.length;
+    const ok = remaining - need >= (auto ? PUSH_RESERVE : 0);
+    if (!ok) console.log(JSON.stringify({ step: "push_skipped", auto, remaining, need }));
+    return ok;
   }
 
   private async send(queued: QueuedEvent, messages: OutMessage[]) {
@@ -1449,6 +1566,17 @@ function mentionedUserIds(event: LineEvent): string[] {
   return (event.message?.mention?.mentionees ?? [])
     .filter((m) => !m.isSelf && m.userId)
     .map((m) => m.userId as string);
+}
+
+/** ボタンが代わりに送る文（名前ボタン・ありがとう・OK・名乗り・メニュー）。「手で打った文」から外す */
+function isButtonText(text: string): boolean {
+  return (
+    !!parseAccept(text) ||
+    !!parseThanks(text) ||
+    /^(OK|直す) #\d+$/.test(text) ||
+    /^わたしは\s*(パパ|ママ|じいじ|ばあば)$/.test(text) ||
+    /^(メニュー|使い方|お迎えを頼む|休みの連絡|予定 見せて|お便りを送る|(保育所|小学校)の電話を教える|(パパ|ママ|じいじ|ばあば)に頼んで)$/.test(text)
+  );
 }
 
 /** 家族の呼び方の言い換え。「おばあちゃんに」「お父さんへ」も ばあば・パパ として読む */

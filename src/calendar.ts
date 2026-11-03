@@ -269,8 +269,14 @@ function cellInner(d: string, input: CalendarInput, slots: Slot[], idx: Map<stri
   const [, , dd] = d.split("-").map(Number);
   const wd = jstWeekday(d);
   // 升の中は「何の予定か」まで読めるように、子どもの色の札に題名を入れる（3件まで。長い題名は…で切る）
-  const cards = input.cards.filter((c) => c.date === d).sort(byTime);
   const daySlots = slots.filter((s) => s.date === d).sort((a, b) => a.time.localeCompare(b.time));
+  // 送迎のカードは、その日の送迎の枠（右下の？・頭文字）と同じことを言うので、枠があれば札を出さない。
+  // 枠は前の晩に作られるので、先の日は「🚗遠足」のように短くして残す（「遠足」と「遠足の送り」が並ばない）
+  const cards = input.cards
+    .filter((c) => c.date === d)
+    .filter((c) => !(c.kind === "送迎" && daySlots.some((s) => s.time === (c.time ?? "17:30"))))
+    .map((c) => (c.kind === "送迎" ? { ...c, title: `🚗${c.title.replace(/の?(送り迎え|送迎|お迎え|迎え|送り)$/, "") || "送迎"}` } : c))
+    .sort(byTime);
   const marks: string[] = [];
   if (daySlots.some(undecided)) marks.push(`<i class="pk nd" title="送迎の担当が未定">？</i>`);
   for (const s of daySlots.filter((s) => !undecided(s)).slice(0, 2)) marks.push(`<i class="pk ok">${esc(adultInitial(s.who ?? ""))}</i>`);

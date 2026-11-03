@@ -141,6 +141,34 @@ export async function memberName(token: string, chatId: string, userId: string):
   return body.displayName ?? null;
 }
 
+/**
+ * 今月のプッシュの残り。無料プランは月200通で、グループへのプッシュは「人数ぶん」数える。
+ * 上限なし（有料の従量）なら null。取れなければ null（止めない）
+ */
+export async function pushRemaining(token: string): Promise<number | null> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const [q, c] = await Promise.all([
+    fetch("https://api.line.me/v2/bot/message/quota", { headers }),
+    fetch("https://api.line.me/v2/bot/message/quota/consumption", { headers }),
+  ]);
+  if (!q.ok || !c.ok) return null;
+  const quota = (await q.json()) as { type?: string; value?: number };
+  const used = (await c.json()) as { totalUsage?: number };
+  if (quota.type !== "limited" || typeof quota.value !== "number") return null;
+  return quota.value - (used.totalUsage ?? 0);
+}
+
+/** グループ（トークルーム）の人数（だんどりさんは数えない）。取れなければ null */
+export async function chatMemberCount(token: string, chatId: string): Promise<number | null> {
+  const kind = chatId.startsWith("R") ? "room" : "group";
+  const res = await fetch(`https://api.line.me/v2/bot/${kind}/${chatId}/members/count`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const body = (await res.json()) as { count?: number };
+  return typeof body.count === "number" ? body.count : null;
+}
+
 /** プッシュ（通数を使う）。返信できなかったときと定時のお知らせだけ */
 export async function push(token: string, to: string, messages: OutMessage[]) {
   const res = await post("push", token, { to, messages });
