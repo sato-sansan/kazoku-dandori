@@ -75,7 +75,7 @@ export async function classifyIntent(
   const children = input.profile.children.map((c) => c.name).join("・");
   const response = await client.beta.messages.create({
     model: INTENT_MODEL,
-    max_tokens: 400,
+    max_tokens: 2000,
     system: SYSTEM,
     output_config: { format: { type: "json_schema", schema: SCHEMA } },
     messages: [{ role: "user", content: `今日：${input.today}（${weekday}）\n子ども：${children}\n<message>${input.text}</message>` }],

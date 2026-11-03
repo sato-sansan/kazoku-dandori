@@ -637,7 +637,8 @@ export class Family extends DurableObject<Env> {
 
     // 「ママに頼んで」「@ばあば にお願いして」「5日の朝の送り じいじに依頼して」→ その人に名指しで聞く
     // 雑談の「先生にお願いして」は拾わない：だんどりさんを呼んだ・@名指しがある・家族の呼び名・送り迎えの話のどれかのときだけ
-    const plain = stripMentions(queued.event).trim();
+    // 聞き分けから戻った一言は、直した文（text）で読む。元の言い方で読み直すと、また通らない
+    const plain = routed ? text : stripMentions(queued.event).trim();
     const mentioned = mentionedUserIds(queued.event).filter((id) => id !== userId);
     const asksSomeone =
       /(に|へ)[\s　]*(頼ん|たのん|頼み|たのみ|依頼|お願い|聞いて|きいて|任せ|まかせ)/.test(plain) ||
@@ -780,7 +781,9 @@ export class Family extends DurableObject<Env> {
     const kindWord = r.kind === "迎え" ? "お迎え" : r.kind === "送り" ? "送り" : "";
     const when = `${md}${r.time ? `${r.time} ` : ""}${kindWord}`;
     const now = /今すぐ|今から|至急/.test(text) ? " 今すぐ" : "";
-    switch (r.intent) {
+    // 相手の名前が書いてある「送迎を頼む」は、その人への名指しとして扱う（「おばあちゃんが行けるか聞いといて」）
+    const intent = r.intent === "送迎を頼む" && r.person ? "人に頼む" : r.intent;
+    switch (intent) {
       case "送迎を頼む":
         if (!r.kind) return this.askWhich(queued);
         await this.privateRequest(queued, `${when}${now}`, role);
@@ -1551,8 +1554,11 @@ export class Family extends DurableObject<Env> {
     const { replyToken } = queued.event;
     const inTime = Date.now() - queued.receivedAt < REPLY_WINDOW_MS;
     if (replyToken && inTime && (await reply(token, replyToken, messages))) return;
-    const to = queued.event.source.type === "user" ? queued.event.source.userId! : queued.familyId;
-    await push(token, to, messages);
+    const isUser = queued.event.source.type === "user";
+    // 返信できなかったときの代わりのプッシュも送信数を使う。グループ宛ては残りを見てから
+    console.log(JSON.stringify({ step: "reply_fallback_push", to: isUser ? "user" : "group" }));
+    if (!isUser && !(await this.pushAllowed(false))) return;
+    await push(token, isUser ? queued.event.source.userId! : queued.familyId, messages);
   }
 }
 
