@@ -329,12 +329,11 @@ function grade(c: Case, actual: ReadResult): Grade {
 
   compare("⑦金額", "金額", pick(exp.cards.map((k) => k.money)), pick(cards.map((k) => k.money)), universe.money);
 
-  // ⑧ 送迎の要否：送迎カードの有無が一致
+  // ⑧ 送迎の要否：送り迎えが要る予定を見落としていない（README の定義どおり、余計な送迎カードは減点しない。理由に残すだけ）
   const expPickup = exp.cards.some((k) => k.kind === "送迎" || (Array.isArray(k.kind) && k.kind.includes("送迎")));
   const actPickup = cards.some((k) => k.kind === "送迎");
-  if (expPickup !== actPickup) {
-    fail("⑧送迎要否", expPickup ? "送迎が要るのに送迎カードが無い" : "送迎が要らないのに送迎カードを作った");
-  }
+  if (expPickup && !actPickup) fail("⑧送迎要否", "送迎が要るのに送迎カードが無い");
+  if (!expPickup && actPickup) reasons.push("（参考）送迎が要らないのに送迎カードを作った。減点なし");
 
   // ⑩ 聞き返し：分からない所でだけ。1回に聞くのは1つなので、要るときは1つ以上あれば○
   if (exp.ask_expected && asks === 0) fail("⑩聞き返し", "分からない所があるのに聞かなかった");

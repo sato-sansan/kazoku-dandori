@@ -27,7 +27,7 @@ import {
 } from "./pickup";
 import { loadProfile } from "./profile";
 import { readNotice, type ReadInput } from "./reader";
-import { addDays, jstDate, jstTime, jstToMs, nextSundayEvening, weekRange } from "./time";
+import { addDays, jstDate, jstTime, jstToMs, jstWeekday, nextSundayEvening, weekRange } from "./time";
 import { ADULTS, type Adult, type FamilyEvent, type Slot } from "./types";
 
 // 返信トークンは1分以内が目安。余裕をみて、これを過ぎたらプッシュで届ける
@@ -101,8 +101,7 @@ export class Family extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS slots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         date TEXT NOT NULL, time TEXT NOT NULL, kind TEXT NOT NULL, place TEXT NOT NULL,
-        children TEXT NOT NULL, who TEXT, status TEXT NOT NULL, requested_by TEXT,
-        UNIQUE (date, time, kind, place)
+        children TEXT NOT NULL, who TEXT, status TEXT NOT NULL, requested_by TEXT
       );
       CREATE TABLE IF NOT EXISTS events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,17 +143,19 @@ export class Family extends DurableObject<Env> {
     for (const row of rows) {
       const queued = JSON.parse(row.payload as string) as QueuedEvent;
       this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('family_id', ?)", queued.familyId);
+      // 先に消す。途中で止まったとき、同じ発言に2回返事するより1回落とすほうが安全
+      this.sql.exec("DELETE FROM inbox WHERE id = ?", row.id);
       try {
         await this.handle(queued);
       } catch (error) {
         console.error("handle failed", queued.event.type, error instanceof Error ? error.message : "");
-        if (queued.event.message?.type === "image") {
+        const type = queued.event.message?.type;
+        if (type === "image" || type === "text") {
           await this.send(queued, [
-            { type: "text", text: "うまく読めませんでした。もう一度写真を送ってください。" },
+            { type: "text", text: "いま読めませんでした。少し待って、もう一度送ってください。" },
           ]).catch(() => console.error("failure notice failed"));
         }
       }
-      this.sql.exec("DELETE FROM inbox WHERE id = ?", row.id);
     }
 
     if (familyId ?? this.familyId()) {
@@ -225,10 +226,14 @@ export class Family extends DurableObject<Env> {
       await this.send(queued, [{ type: "text", text: `${describeSlot(slot, today)}は、もう${slot.who}に決まっています。` }]);
       return;
     }
+    if (slot.status === "お願い中") {
+      await this.send(queued, [{ type: "text", text: `${describeSlot(slot, today)}は、もうグループで聞いています。` }]);
+      return;
+    }
     this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = '1対1' WHERE id = ?", slot.id);
     // 頼んだ人の名前は出さず、頼んだ人のボタンも出さない
     await this.pushToGroup([askMessage({ ...slot, status: "お願い中" }, { exclude: role })]);
-    await this.send(queued, [{ type: "text", text: "グループで聞きました。決まったらお知らせします。" }]);
+    await this.send(queued, [{ type: "text", text: "グループで聞きました。グループを見ていてください。" }]);
   }
 
   private async handleGroupText(queued: QueuedEvent, text: string) {
@@ -310,9 +315,22 @@ export class Family extends DurableObject<Env> {
         await this.send(queued, [withButtons("どなたですか？", WHO_BUTTONS)]);
         return;
       }
-      const slot = this.slotsOf([today, addDays(today, 1)]).find((s) => s.status === "決定" && s.who === role);
+      // 「明日のお迎え無理」なら明日の迎えだけ。日や種類が書いてなければ、本人の枠が1つのときだけ取り消す
+      const mine = this.slotsOf([today, addDays(today, 1)]).filter((s) => s.status === "決定" && s.who === role);
+      const hint = parseRequest(text, today);
+      const matched = hint ? mine.filter((s) => s.kind === hint.kind && (/今日|きょう|明日|あした/.test(text) ? s.date === hint.date : true)) : mine;
+      const slot = matched.length === 1 ? matched[0] : null;
       if (!slot) {
-        await this.send(queued, [{ type: "text", text: "分かりました。" }]);
+        if (matched.length > 1) {
+          await this.send(queued, [
+            withButtons(
+              "どれを取り消しますか？",
+              matched.slice(0, 4).map((s) => ({ label: describeSlot(s, today).slice(0, 20), text: `${describeSlot(s, today)} 無理` })),
+            ),
+          ]);
+        } else {
+          await this.send(queued, [{ type: "text", text: "分かりました。" }]);
+        }
         return;
       }
       this.sql.exec("UPDATE slots SET who = NULL, status = 'お願い中' WHERE id = ?", slot.id);
@@ -366,8 +384,11 @@ export class Family extends DurableObject<Env> {
     // 雑談には黙っている
     if (!result.is_notice || result.cards.length === 0) return;
 
+    // 聞き返しへの答えなら前のカードと入れ替える。別の子の別の連絡なら、前のカードはそのまま残す
     if (awaiting) {
-      this.sql.exec("UPDATE batches SET status = 'replaced', awaiting = NULL WHERE id = ?", awaiting.id);
+      const before = JSON.parse(awaiting.cards) as Card[];
+      const related = result.cards.some((card) => before.some((b) => b.child === card.child));
+      if (related) this.sql.exec("UPDATE batches SET status = 'replaced', awaiting = NULL WHERE id = ?", awaiting.id);
     }
     const question = firstQuestion(result.cards);
     const batch = this.sql
@@ -463,6 +484,17 @@ export class Family extends DurableObject<Env> {
       await this.send(queued, [withButtons("どなたですか？", WHO_BUTTONS)]);
       return;
     }
+    if (from === target.who) {
+      await this.send(queued, [{ type: "text", text: "自分へのありがとうは数えません 😊" }]);
+      return;
+    }
+    const dup = this.sql
+      .exec("SELECT id FROM events WHERE kind = 'ありがとう' AND who = ? AND to_who = ? AND slot_id IS ? LIMIT 1", from, target.who, target.slot_id)
+      .toArray();
+    if (dup.length > 0) {
+      await this.send(queued, [{ type: "text", text: "もう届いています 🙏" }]);
+      return;
+    }
     this.sql.exec(
       "INSERT INTO events (at, kind, who, to_who, slot_id) VALUES (?, 'ありがとう', ?, ?, ?)",
       Date.now(),
@@ -476,17 +508,21 @@ export class Family extends DurableObject<Env> {
   /** その日の未定の枠をグループに聞く（19:00 と、翌朝7:00 の2回まで） */
   private async askForDate(date: string, retry: boolean) {
     const profile = loadProfile(this.env.FAMILY_PROFILE);
-    this.upsertSlots(dailySlots(profile, date));
+    // 土日は保育所の送迎がない。お便り由来の枠（行事・習い事）だけ
+    if (!isWeekend(date)) this.upsertSlots(dailySlots(profile, date));
     const cards = this.okCards();
     this.upsertSlots(slotsFromCards(cards, date));
 
     const open = this.slotsOf([date]).filter((s) => s.status === "未定" || (retry && s.status === "お願い中"));
     if (open.length === 0) return;
-    const messages = open.slice(0, 5).map((slot) => askMessage(slot, { retry }));
-    await this.pushToGroup(messages);
+    // 先に印と予約を済ませてから送る。送信が1回失敗しても、朝の聞き直しと念押しは残る
     for (const slot of open) this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = COALESCE(requested_by, '自動') WHERE id = ?", slot.id);
     if (!retry) this.addJob(jstToMs(date, ASK_MORNING), "ask_morning", date);
     for (const slot of open) this.addJob(jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS, "reminder", String(slot.id));
+    // 1回の push は5通まで。6件以上なら分けて送る
+    for (let i = 0; i < open.length; i += 5) {
+      await this.pushToGroup(open.slice(i, i + 5).map((slot) => askMessage(slot, { retry })));
+    }
   }
 
   // ── 締め：ありがとう → 家族の冒険 ────────────────────────
@@ -509,8 +545,10 @@ export class Family extends DurableObject<Env> {
   private ensureJobs() {
     const today = jstDate();
     const evening = jstToMs(today, ASK_EVENING);
-    if (evening > Date.now()) this.addJob(evening, "ask_evening", addDays(today, 1));
-    else this.addJob(jstToMs(addDays(today, 1), ASK_EVENING), "ask_evening", addDays(today, 2));
+    const target = evening > Date.now() ? addDays(today, 1) : addDays(today, 2);
+    const at = evening > Date.now() ? evening : jstToMs(addDays(today, 1), ASK_EVENING);
+    // 翌日が土日でも、お便り由来の枠があるかもしれないので予約はする（askForDate 側で毎日の枠だけ省く）
+    this.addJob(at, "ask_evening", target);
     this.addJob(nextSundayEvening(), "weekly_card", "");
   }
 
@@ -525,10 +563,13 @@ export class Family extends DurableObject<Env> {
       .toArray();
     for (const job of due) {
       this.sql.exec("DELETE FROM jobs WHERE id = ?", job.id);
+      // payload の末尾 "|n" は失敗した回数。3回までは5分後にやり直す
+      const [payload, tries = "0"] = job.payload.split("|");
       try {
-        await this.runJob(job.type as JobType, job.payload);
+        await this.runJob(job.type as JobType, payload);
       } catch (error) {
         console.error("job failed", job.type, error instanceof Error ? error.message : "");
+        if (Number(tries) < 3) this.addJob(Date.now() + 5 * 60 * 1000, job.type as JobType, `${payload}|${Number(tries) + 1}`);
       }
     }
   }
@@ -558,26 +599,49 @@ export class Family extends DurableObject<Env> {
       .flatMap((row) => JSON.parse(row.cards) as Card[]);
   }
 
+  /** 同じ日・同じ種類・同じ場所の枠は1つにまとめる。決まっている枠は上書きしない */
   private upsertSlots(slots: Omit<Slot, "id">[]) {
     for (const slot of slots) {
+      const same = this.slotsOf([slot.date]).find((s) => s.kind === slot.kind && s.place === slot.place);
+      if (!same) {
+        this.sql.exec(
+          `INSERT INTO slots (date, time, kind, place, children, who, status, requested_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          slot.date,
+          slot.time,
+          slot.kind,
+          slot.place,
+          JSON.stringify(slot.children),
+          slot.who,
+          slot.status,
+          slot.requestedBy ?? null,
+        );
+        continue;
+      }
+      if (same.status === "決定") continue;
+      // お便りに担当が書いてあればそれで決まる。子どもの名前は多いほうを残す
+      const children = slot.children.length > same.children.length ? slot.children : same.children;
       this.sql.exec(
-        `INSERT OR IGNORE INTO slots (date, time, kind, place, children, who, status, requested_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        slot.date,
+        "UPDATE slots SET time = ?, children = ?, who = COALESCE(?, who), status = ? WHERE id = ?",
         slot.time,
-        slot.kind,
-        slot.place,
-        JSON.stringify(slot.children),
+        JSON.stringify(children),
         slot.who,
-        slot.status,
-        slot.requestedBy ?? null,
+        slot.who ? "決定" : same.status,
+        same.id,
       );
     }
   }
 
   private findOrCreateSlot(date: string, time: string, kind: Slot["kind"], requestedBy: Slot["requestedBy"]): Slot {
-    const existing = this.slotsOf([date]).find((s) => s.kind === kind && s.time === time);
-    if (existing) return existing;
+    // 「17時」と毎日の 17:30 を別枠にしない。同じ日・同じ種類なら同じ枠
+    const existing = this.slotsOf([date]).find((s) => s.kind === kind && s.place === "保育所");
+    if (existing) {
+      if (existing.status !== "決定" && existing.time !== time) {
+        this.sql.exec("UPDATE slots SET time = ? WHERE id = ?", time, existing.id);
+        return { ...existing, time };
+      }
+      return existing;
+    }
     const profile = loadProfile(this.env.FAMILY_PROFILE);
     const children = profile.children.filter((c) => c.attends === "保育所").map((c) => c.name);
     this.upsertSlots([{ date, time, kind, place: "保育所", children, who: null, status: "未定", requestedBy }]);
@@ -610,6 +674,11 @@ export class Family extends DurableObject<Env> {
     const to = queued.event.source.type === "user" ? queued.event.source.userId! : queued.familyId;
     await push(token, to, messages);
   }
+}
+
+function isWeekend(date: string) {
+  const day = jstWeekday(date);
+  return day === 0 || day === 6;
 }
 
 /** グループでの急なお迎えの頼み。「お迎え」＋急ぎ・呼びかけの言葉。引受のボタン文は除く */
