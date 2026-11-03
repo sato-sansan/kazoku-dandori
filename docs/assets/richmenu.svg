@@ -1,0 +1,57 @@
+<!-- だんどりさんのホーム画面（LINE リッチメニュー 2500×843）。絵は期間中に自作。直したら scripts/svg2png.swift で PNG にして、グループで「リッチメニュー 作り直し」 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="2500" height="843" viewBox="0 0 2500 843" font-family="Zen Maru Gothic, Hiragino Maru Gothic ProN, Hiragino Sans, sans-serif">
+  <rect width="2500" height="843" fill="#FFFFFF"/>
+  <path d="M625 40 v763 M1250 40 v763 M1875 40 v763" stroke="#E6E0D6" stroke-width="4"/>
+
+  <g id="t1">
+    <circle cx="312" cy="330" r="170" fill="#FFF1C2"/>
+    <g transform="translate(312 330)">
+      <rect x="-100" y="-80" width="200" height="180" rx="22" fill="#FFFFFF" stroke="#2B2B2B" stroke-width="10"/>
+      <rect x="-100" y="-80" width="200" height="50" rx="22" fill="#E05A4E"/>
+      <rect x="-100" y="-55" width="200" height="25" fill="#E05A4E"/>
+      <rect x="-60" y="-100" width="16" height="44" rx="8" fill="#2B2B2B"/>
+      <rect x="44" y="-100" width="16" height="44" rx="8" fill="#2B2B2B"/>
+      <text x="0" y="68" font-size="96" font-weight="700" fill="#2B2B2B" text-anchor="middle">7</text>
+    </g>
+    <text x="312" y="640" font-size="86" font-weight="700" fill="#1F1F1F" text-anchor="middle">カレンダー</text>
+    <text x="312" y="720" font-size="40" fill="#6B6B6B" text-anchor="middle">予定を見る</text>
+  </g>
+
+  <g id="t2">
+    <circle cx="937" cy="330" r="170" fill="#DCEEFF"/>
+    <g transform="translate(937 340)">
+      <path d="M-120 20 v-30 q0 -20 20 -20 l20 -50 q8 -16 26 -16 h108 q18 0 26 16 l20 50 q20 0 20 20 v30 q0 16 -16 16 h-208 q-16 0 -16 -16z" fill="#FFFFFF" stroke="#2B2B2B" stroke-width="10" stroke-linejoin="round"/>
+      <path d="M-76 -30 l14 -36 h44 v36z M-8 -30 v-36 h44 l14 36z" fill="#9CCBFF" stroke="#2B2B2B" stroke-width="6" stroke-linejoin="round"/>
+      <circle cx="-70" cy="40" r="26" fill="#2B2B2B"/><circle cx="-70" cy="40" r="10" fill="#FFFFFF"/>
+      <circle cx="70" cy="40" r="26" fill="#2B2B2B"/><circle cx="70" cy="40" r="10" fill="#FFFFFF"/>
+    </g>
+    <text x="937" y="640" font-size="86" font-weight="700" fill="#1F1F1F" text-anchor="middle">お迎えを頼む</text>
+    <text x="937" y="720" font-size="40" fill="#6B6B6B" text-anchor="middle">だれが行く？</text>
+  </g>
+
+  <g id="t3">
+    <circle cx="1562" cy="330" r="170" fill="#FFE1E6"/>
+    <g transform="translate(1562 335)">
+      <circle cx="0" cy="0" r="100" fill="#FFE2A8" stroke="#2B2B2B" stroke-width="10"/>
+      <rect x="-70" y="-78" width="140" height="44" rx="14" fill="#BFE4FF" stroke="#2B2B2B" stroke-width="6"/>
+      <circle cx="-34" cy="10" r="8" fill="#2B2B2B"/><circle cx="34" cy="10" r="8" fill="#2B2B2B"/>
+      <circle cx="-56" cy="34" r="12" fill="#FFB3B3"/><circle cx="56" cy="34" r="12" fill="#FFB3B3"/>
+      <path d="M-16 52 Q0 42 16 52" fill="none" stroke="#2B2B2B" stroke-width="6" stroke-linecap="round"/>
+    </g>
+    <text x="1562" y="640" font-size="86" font-weight="700" fill="#1F1F1F" text-anchor="middle">休みの連絡</text>
+    <text x="1562" y="720" font-size="40" fill="#6B6B6B" text-anchor="middle">園・学校への文</text>
+  </g>
+
+  <g id="t4">
+    <circle cx="2187" cy="330" r="170" fill="#E2F5DA"/>
+    <g transform="translate(2187 340)">
+      <rect x="-110" y="-64" width="220" height="150" rx="24" fill="#2B2B2B"/>
+      <rect x="-46" y="-90" width="92" height="34" rx="12" fill="#2B2B2B"/>
+      <circle cx="0" cy="12" r="52" fill="#FFFFFF"/>
+      <circle cx="0" cy="12" r="30" fill="#9CCBFF"/>
+      <circle cx="78" cy="-34" r="10" fill="#FFD23F"/>
+    </g>
+    <text x="2187" y="640" font-size="86" font-weight="700" fill="#1F1F1F" text-anchor="middle">お便りを送る</text>
+    <text x="2187" y="720" font-size="40" fill="#6B6B6B" text-anchor="middle">写真を撮るだけ</text>
+  </g>
+</svg>
