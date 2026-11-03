@@ -227,6 +227,17 @@ export function parseDay(text: string, today: string): string | null {
       return m0 === 12 ? iso(y + 1, 1, d) : iso(y, m0 + 1, d);
     }
   }
+  // 「金曜」「木曜日」：今日から数えて次のその曜日（今日がその曜日なら今日）。「来週の金曜」は来週の月〜日の中
+  const wk = /(来週の?)?([月火水木金土日])曜/.exec(t);
+  if (wk) {
+    const target = WEEKDAY.indexOf(wk[2]);
+    const wd = new Date(Date.UTC(y, m0 - 1, d0)).getUTCDay();
+    if (wk[1]) {
+      const nextMonday = addDays(today, ((8 - wd) % 7) || 7);
+      return addDays(nextMonday, (target + 6) % 7);
+    }
+    return addDays(today, (target - wd + 7) % 7);
+  }
   return null;
 }
 

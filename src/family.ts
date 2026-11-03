@@ -10,6 +10,7 @@ import {
 import { renderCalendar, renderIcs } from "./calendar";
 import { firstQuestion, type Card, type CardSource } from "./card";
 import { absenceMessages, draftAbsence, looksLikeAbsence } from "./drafts";
+import { classifyIntent, type IntentResult } from "./intent";
 import type { Env } from "./env";
 import {
   createRichMenu,
@@ -75,6 +76,8 @@ const MENU_BUTTONS: QuickButton[] = [
   { label: "❓ 使い方", text: "使い方" },
 ];
 const MENU_TEXT = "何をしますか？";
+/** 呼ばれたのに分からなかったとき。黙らずに入口を出す */
+const NOT_UNDERSTOOD = "ごめんなさい、分かりませんでした。下のボタンからどうぞ。";
 const HOW_TO = `だんどりさんへの頼み方
 📷 お便りの写真を送る → 予定にします（写真は残るので紙は捨ててOK）
 🤒「熱で休み」→ 園・学校への連絡文を［コピー］
@@ -274,7 +277,7 @@ export class Family extends DurableObject<Env> {
   }
 
   /** 1対1の自由な文：「明日17時のお迎え頼んでおいて」をグループで代わりに聞く。頼みとして読めなければ false */
-  private async privateRequest(queued: QueuedEvent, text: string, role: Adult): Promise<boolean> {
+  private async privateRequest(queued: QueuedEvent, text: string, role: Adult | null): Promise<boolean> {
     const today = jstDate();
     const request = parseRequest(text, today);
     if (!request) return false;
@@ -294,7 +297,7 @@ export class Family extends DurableObject<Env> {
     }
     this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = '1対1' WHERE id = ?", slot.id);
     // 頼んだ人の名前は出さず、頼んだ人のボタンも出さない
-    await this.askGroup(queued, [askMessage({ ...slot, status: "お願い中" }, { exclude: role })]);
+    await this.askGroup(queued, [askMessage({ ...slot, status: "お願い中" }, { exclude: role ?? undefined })]);
     return true;
   }
 
@@ -335,7 +338,7 @@ export class Family extends DurableObject<Env> {
     const userId = queued.event.source.userId;
     const from = this.roleOf(userId);
     // 相手：①本文の「ママ」などの呼び名 ②@名指しの人 ③LINE の表示名（「さくらに」）
-    let role: Adult | null = ADULTS.find((a) => new RegExp(`${a}(さん)?[\\s　]*(に|へ)`).test(plain)) ?? null;
+    let role: Adult | null = roleInText(plain);
     let ids = mentioned;
     if (!role) role = mentioned.map((id) => this.roleOf(id)).find((r): r is Adult => !!r) ?? null;
     const name = /^(?:.*?[、。\s　])?([^、。\s　]+?)(?:さん|ちゃん|くん)?[\s　]*(?:に|へ)[\s　]*(?:頼|たの|依頼|お願い|聞|きい|任|まか)/.exec(plain)?.[1];
@@ -439,10 +442,15 @@ export class Family extends DurableObject<Env> {
     await this.send(queued, [{ type: "text", text: "グループで聞きました。グループを見ていてください。" }]);
   }
 
-  private async handleText(queued: QueuedEvent, text: string) {
+  /**
+   * routed：聞き分け（Claude）から、決まった言い方に直して戻ってきた一言。もう一度聞き分けには回さない（回り続けないため）
+   */
+  private async handleText(queued: QueuedEvent, rawText: string, routed = false) {
     const userId = queued.event.source.userId;
     const isPrivate = queued.event.source.type === "user";
     const today = jstDate();
+    // 「@だんどりさん 予定見せて」も「予定見せて」と同じに読む（だんどりさんへの呼びかけだけ外す）
+    const text = routed ? rawText : withoutSelfMention(queued.event, rawText);
 
     // 「わたしは ばあば」→ 名簿に登録。1対1の道が開く
     const who = /^わたしは\s*(パパ|ママ|じいじ|ばあば)$/.exec(text);
@@ -618,13 +626,18 @@ export class Family extends DurableObject<Env> {
       (mentioned.length > 0 && /頼ん|たのん|依頼|お願い/.test(plain));
     if (
       asksSomeone &&
-      (isPrivate || botMentioned(queued.event) || mentioned.length > 0 || ADULTS.some((a) => plain.includes(a)) || parseRequest(plain, today))
+      (isPrivate || botMentioned(queued.event) || mentioned.length > 0 || roleInText(plain) !== null || parseRequest(plain, today))
     ) {
       await this.delegate(queued, plain, mentioned, today);
       return;
     }
 
     // 急なお迎え：「園から電話、今すぐお迎え」「今日15時にお迎えだれか行ける？」→ その場で名前ボタン
+    // 「金曜の夕方だれか迎え行ける？」のように別の日なら、急ぎではなくその日の頼み
+    const otherDay = parseDay(text, today);
+    if (isUrgentPickup(text) && otherDay && otherDay !== today && !/今すぐ|今から|至急/.test(text)) {
+      if (await this.privateRequest(queued, text, this.roleOf(userId))) return;
+    }
     if (isUrgentPickup(text)) {
       const role = this.roleOf(userId);
       const parsed = parseRequest(text, today);
@@ -683,13 +696,7 @@ export class Family extends DurableObject<Env> {
 
     // 「そうた 熱37.8 休み」→ 相手ごとの連絡文
     if (looksLikeAbsence(text)) {
-      const draft = await draftAbsence(this.env.ANTHROPIC_API_KEY, {
-        text,
-        profile: this.profile(),
-        today,
-      });
-      console.log(JSON.stringify({ step: "absence", attends: draft.attends, ask: !!draft.ask }));
-      await this.send(queued, absenceMessages(draft, this.profile().contacts));
+      await this.absence(queued, text, today);
       return;
     }
 
@@ -697,9 +704,109 @@ export class Family extends DurableObject<Env> {
     const role = this.roleOf(userId);
     if (isPrivate && role && (await this.privateRequest(queued, text, role))) return;
 
+    // 呼ばれた（@だんどりさん・1対1）のに決まった言い方に当てはまらない → Claude で聞き分けて、今ある仕組みに回す
+    const called = isPrivate || botMentioned(queued.event);
+    if (routed) {
+      // 直した一言でも通らなかった。お便りとして読ませない（作った文を予定にしない）
+      await this.send(queued, [withButtons(NOT_UNDERSTOOD, MENU_BUTTONS)]);
+      return;
+    }
+    if (called && (await this.routeCalled(queued, text, today))) return;
+
     const saved = await this.read(queued, { text }, "ひとこと");
-    // グループの雑談には黙る。1対1で分からなかったときだけ、入口を出す
-    if (!saved && isPrivate) await this.send(queued, [withButtons("分かりませんでした。下のボタンからどうぞ。", MENU_BUTTONS)]);
+    // グループの雑談には黙る。呼ばれたのに分からなかったときだけ、入口を出す（黙らない）
+    if (!saved && called) await this.send(queued, [withButtons(NOT_UNDERSTOOD, MENU_BUTTONS)]);
+  }
+
+  /** 「熱で休み」→ 相手ごとの連絡文の下書き（［コピー］［📞 電話］） */
+  private async absence(queued: QueuedEvent, text: string, today: string) {
+    const draft = await draftAbsence(this.env.ANTHROPIC_API_KEY, {
+      text,
+      profile: this.profile(),
+      today,
+    });
+    console.log(JSON.stringify({ step: "absence", attends: draft.attends, ask: !!draft.ask }));
+    await this.send(queued, absenceMessages(draft, this.profile().contacts));
+  }
+
+  /**
+   * 呼ばれた一言を Claude（安いモデル）で聞き分け、決まった言い方に直して今ある仕組みに回す。
+   * 返事の文はモデルに書かせない。true なら返事済み、false ならお便りとして読む（read）に任せる
+   */
+  private async routeCalled(queued: QueuedEvent, text: string, today: string): Promise<boolean> {
+    const userId = queued.event.source.userId;
+    const role = this.roleOf(userId);
+    // 名簿にいない人には応じない（子どもと話さない）。まず名乗ってもらう
+    if (!role) {
+      await this.send(queued, [withButtons("どなたですか？", WHO_BUTTONS)]);
+      return true;
+    }
+    // お礼・あいさつは Claude を呼ばずに短く返す（「ありがとね」に「分かりませんでした」と言わない）
+    if (/^(ありがと|ありがとう|助かる|助かった|おはよう|こんにちは|こんばんは|おやすみ|よろしく|お疲れ|おつかれ|いつも)/.test(text.replace(/[\s　]/g, ""))) {
+      await this.send(queued, [withButtons("はい、ここにいます。用事があれば下のボタンからどうぞ。", MENU_BUTTONS)]);
+      return true;
+    }
+    let r: IntentResult | null = null;
+    try {
+      r = await classifyIntent(this.env.ANTHROPIC_API_KEY, { text, today, profile: this.profile() });
+    } catch (error) {
+      console.error("intent failed", error instanceof Error ? error.message.slice(0, 200) : "");
+    }
+    // 中身は記録しない。形だけ
+    console.log(JSON.stringify({ step: "intent", intent: r?.intent ?? null, date: !!r?.date, kind: r?.kind ?? null, person: !!r?.person }));
+    if (!r) return false;
+
+    const md = r.date ? `${Number(r.date.slice(5, 7))}/${Number(r.date.slice(8, 10))}の` : "";
+    const kindWord = r.kind === "迎え" ? "お迎え" : r.kind === "送り" ? "送り" : "";
+    const when = `${md}${r.time ? `${r.time} ` : ""}${kindWord}`;
+    const now = /今すぐ|今から|至急/.test(text) ? " 今すぐ" : "";
+    switch (r.intent) {
+      case "送迎を頼む":
+        if (!r.kind) return this.askWhich(queued);
+        await this.privateRequest(queued, `${when}${now}`, role);
+        return true;
+      case "送迎を断る":
+        await this.handleText(queued, `${when || md} 難しい`.trim(), true);
+        return true;
+      case "人に頼む":
+        if (!r.person && mentionedUserIds(queued.event).filter((id) => id !== userId).length === 0) {
+          await this.send(queued, [
+            withButtons(
+              "どなたに頼みますか？",
+              ADULTS.filter((a) => a !== role).map((a) => ({ label: a, text: `${when} ${a}に頼んで`.trim() })),
+            ),
+          ]);
+          return true;
+        }
+        await this.handleText(queued, `${when} ${r.person ?? ""}に頼んで`.trim(), true);
+        return true;
+      case "休みの連絡":
+        await this.absence(queued, text, today);
+        return true;
+      case "写真を残す":
+        await this.keepRecentPhoto(queued, text);
+        return true;
+      case "予定を見る":
+        await this.handleText(queued, "予定 見せて", true);
+        return true;
+      case "使い方":
+        await this.send(queued, [withButtons(HOW_TO, MENU_BUTTONS)]);
+        return true;
+      case "雑談":
+        await this.send(queued, [withButtons("はい、ここにいます。用事があれば下のボタンからどうぞ。", MENU_BUTTONS)]);
+        return true;
+      case "お便り・予定の連絡":
+        return false;
+      default:
+        await this.send(queued, [withButtons(NOT_UNDERSTOOD, MENU_BUTTONS)]);
+        return true;
+    }
+  }
+
+  /** 送り迎えのどちらか分からないとき */
+  private async askWhich(queued: QueuedEvent) {
+    await this.send(queued, [withButtons("送りとお迎え、どちらですか？「明日の朝の送り だれか」のように教えてください。", MENU_BUTTONS)]);
+    return true;
   }
 
   // ── 芯A：読んで、聞く ─────────────────────────────────
@@ -1342,6 +1449,31 @@ function mentionedUserIds(event: LineEvent): string[] {
   return (event.message?.mention?.mentionees ?? [])
     .filter((m) => !m.isSelf && m.userId)
     .map((m) => m.userId as string);
+}
+
+/** 家族の呼び方の言い換え。「おばあちゃんに」「お父さんへ」も ばあば・パパ として読む */
+const ROLE_WORDS: Record<Adult, string> = {
+  パパ: "パパ|ぱぱ|お父さん|おとうさん|父|夫|旦那",
+  ママ: "ママ|まま|お母さん|おかあさん|母|妻|嫁",
+  じいじ: "じいじ|じぃじ|じーじ|おじいちゃん|祖父",
+  ばあば: "ばあば|ばぁば|ばーば|おばあちゃん|祖母",
+};
+
+/** 「○○に頼んで」の ○○ が家族のだれか。呼び名・言い換えで見る */
+function roleInText(text: string): Adult | null {
+  // 「祖父に」を「父に」と読まないよう、じいじ・ばあばを先に見る
+  const order: Adult[] = ["じいじ", "ばあば", "パパ", "ママ"];
+  return order.find((a) => new RegExp(`(${ROLE_WORDS[a]})(さん|ちゃん)?[\\s　]*(に|へ)`).test(text)) ?? null;
+}
+
+/** だんどりさんへの呼びかけ（@だんどりさん）だけを本文から外す。ほかの人への @ は残す */
+function withoutSelfMention(event: LineEvent, fallback: string): string {
+  const raw = event.message?.text;
+  if (!raw) return fallback;
+  let text = raw;
+  const spans = (event.message?.mention?.mentionees ?? []).filter((m) => m.isSelf).sort((a, b) => b.index - a.index);
+  for (const s of spans) text = text.slice(0, s.index) + text.slice(s.index + s.length);
+  return text.replace(/@だんどりさん/g, "").replace(/[\s　]+/g, " ").trim();
 }
 
 /** だんどりさん自身が @名指しされたか */
