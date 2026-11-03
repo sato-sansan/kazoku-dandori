@@ -1,3 +1,4 @@
+import type { Directory } from "./directory";
 import type { Family } from "./family";
 
 export interface Env {
@@ -6,4 +7,5 @@ export interface Env {
   ANTHROPIC_API_KEY: string;
   FAMILY_PROFILE?: string;
   FAMILY: DurableObjectNamespace<Family>;
+  DIRECTORY: DurableObjectNamespace<Directory>;
 }

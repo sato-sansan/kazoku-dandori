@@ -4,8 +4,14 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
-    "bindings": [{ "name": "FAMILY", "class_name": "Family" }]
+    "bindings": [
+      { "name": "FAMILY", "class_name": "Family" },
+      { "name": "DIRECTORY", "class_name": "Directory" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Family"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Family"] },
+    { "tag": "v2", "new_sqlite_classes": ["Directory"] }
+  ],
   "observability": { "enabled": true }
 }

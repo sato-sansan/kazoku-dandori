@@ -2,6 +2,7 @@ import type { Env } from "./env";
 import { verifySignature, type LineEvent } from "./line";
 
 export { Family } from "./family";
+export { Directory } from "./directory";
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -19,12 +20,17 @@ export default {
 
     // 2秒以内に200を返す。ここでは家族ごとの箱に入れるだけ
     const { events } = JSON.parse(body) as { events: LineEvent[] };
+    const directory = env.DIRECTORY.get(env.DIRECTORY.idFromName("directory"));
     await Promise.all(
-      events.map((event) => {
-        // 相手は大人のグループだけ。1対1のトークには応じない（子どもと直接話さないため）
-        const familyId = event.source.groupId ?? event.source.roomId;
+      events.map(async (event) => {
+        let familyId = event.source.groupId ?? event.source.roomId;
+        // 1対1のトークは、グループで登録した大人だけ。知らない人・子どもには応じない
+        if (!familyId && event.source.userId) {
+          familyId = (await directory.familyOf(event.source.userId)) ?? undefined;
+          if (!familyId) return;
+        }
         if (!familyId) return;
-        return env.FAMILY.get(env.FAMILY.idFromName(familyId)).enqueue(familyId, event);
+        await env.FAMILY.get(env.FAMILY.idFromName(familyId)).enqueue(familyId, event);
       }),
     );
     return new Response("OK");
