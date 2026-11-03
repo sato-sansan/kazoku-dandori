@@ -505,7 +505,7 @@ export class Family extends DurableObject<Env> {
         today,
       });
       console.log(JSON.stringify({ step: "absence", attends: draft.attends, ask: !!draft.ask }));
-      await this.send(queued, absenceMessages(draft));
+      await this.send(queued, absenceMessages(draft, this.profile().contacts));
       return;
     }
 
@@ -945,7 +945,7 @@ export class Family extends DurableObject<Env> {
         today,
       });
       console.log(JSON.stringify({ step: "absence", attends: draft.attends, ask: !!draft.ask, via: "buttons" }));
-      await this.send(queued, absenceMessages(draft));
+      await this.send(queued, absenceMessages(draft, profile.contacts));
       return true;
     }
     // 会話の途中で別の話が来たら、会話は捨てて普通に処理する

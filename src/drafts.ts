@@ -160,8 +160,11 @@ export function looksLikeAbsence(text: string): boolean {
   return /休み|休む|休ませ|欠席|発熱|熱\s*[0-9０-９]|熱が|体調不良|吐い|嘔吐|下痢/.test(t);
 }
 
-/** 下書きを LINE に出す形。相手ごとに Flex 1枚（最大3枚）＋ 組み直し案・聞き返しの本文1通 */
-export function absenceMessages(draft: AbsenceDraft): OutMessage[] {
+/**
+ * 下書きを LINE に出す形。相手ごとに Flex 1枚（最大3枚）＋ 組み直し案・聞き返しの本文1通。
+ * 通い先の電話がプロフィールにあれば「電話で伝える」の台本と［電話をかける］も付ける（アプリより電話の方が楽な人のため）
+ */
+export function absenceMessages(draft: AbsenceDraft, contacts?: FamilyProfile["contacts"]): OutMessage[] {
   const messages: OutMessage[] = [];
   const day = formatDate(draft.date);
 
@@ -173,6 +176,8 @@ export function absenceMessages(draft: AbsenceDraft): OutMessage[] {
       draft.nursery.note && `連絡欄：${draft.nursery.note}`,
     ];
     messages.push(bubble("保育所アプリ", lines, draft.nursery.note));
+    const contact = contacts?.["保育所"];
+    if (contact) messages.push(phoneBubble("保育所", contact, draft, day, draft.nursery.note));
   }
   if (draft.school) {
     const lines = [
@@ -182,6 +187,8 @@ export function absenceMessages(draft: AbsenceDraft): OutMessage[] {
       draft.school.note && `備考：${draft.school.note}`,
     ];
     messages.push(bubble("小学校アプリ", lines, draft.school.note));
+    const contact = contacts?.["小学校"];
+    if (contact) messages.push(phoneBubble("小学校", contact, draft, day, draft.school.note));
   }
   if (draft.lesson) {
     messages.push(bubble("習い事", [draft.lesson], draft.lesson));
@@ -193,6 +200,71 @@ export function absenceMessages(draft: AbsenceDraft): OutMessage[] {
     messages.push({ type: "text", text: `${draft.child}：${day} お休み\n送る相手が分かりませんでした。` });
   }
   return messages.slice(0, 5);
+}
+
+/**
+ * 「電話で伝える」。15秒で言える台本を大きな字で、［電話をかける］は LINE の tel: で端末の電話を開く。
+ * かけるのは人。だんどりさんは番号も台本も出すだけで、電話はしない
+ */
+function phoneBubble(
+  to: "保育所" | "小学校",
+  contact: { phone: string; by?: string },
+  draft: AbsenceDraft,
+  day: string,
+  note: string,
+): FlexMessage {
+  const script = [`${draft.child}の保護者です。`, `${day}はお休みします。`, note, "よろしくお願いします。"].filter(
+    (line) => line.trim(),
+  );
+  const title = `${to}に電話で伝える`;
+  const deadline = contact.by ? `${contact.by}までに電話` : null;
+  const tel = contact.phone.replace(/[^0-9+]/g, "");
+  const plain = [title, deadline, ...script, contact.phone].filter(Boolean).join("\n");
+  return {
+    type: "flex",
+    altText: plain.slice(0, 400),
+    contents: {
+      type: "bubble",
+      header: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          { type: "text", text: `📞 ${title}`, weight: "bold", size: "lg", color: "#1f6f8b" },
+          ...(deadline ? [{ type: "text", text: deadline, size: "sm", color: "#c0392b" }] : []),
+        ],
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          { type: "text", text: "電話で言うこと（そのまま読めます）", size: "sm", color: "#888888" },
+          ...script.map((line) => ({ type: "text", text: line, wrap: true, size: "xl" })),
+          { type: "text", text: contact.phone, size: "md", color: "#555555" },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            height: "sm",
+            color: "#2e8b57",
+            action: { type: "uri", label: "📞 電話をかける", uri: `tel:${tel}` },
+          },
+          {
+            type: "button",
+            style: "secondary",
+            height: "sm",
+            action: { type: "clipboard", label: "台本をコピー", clipboardText: script.join("\n").slice(0, 1000) },
+          },
+        ],
+      },
+    },
+  };
 }
 
 const CONFIRM = "送る前に確認してください";
