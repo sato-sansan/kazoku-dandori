@@ -15,9 +15,19 @@ export interface LineEvent {
   unsend?: { messageId: string };
 }
 
-export interface OutMessage {
+export type OutMessage = TextMessage | FlexMessage;
+
+export interface TextMessage {
   type: "text";
   text: string;
+  quickReply?: { items: QuickReplyItem[] };
+}
+
+/** Flex の中身は LINE の仕様どおりの JSON（src/flex.ts が組み立てる） */
+export interface FlexMessage {
+  type: "flex";
+  altText: string;
+  contents: Record<string, unknown>;
   quickReply?: { items: QuickReplyItem[] };
 }
 
@@ -26,7 +36,7 @@ interface QuickReplyItem {
   action: { type: "message"; label: string; text: string };
 }
 
-export function withButtons(text: string, buttons: { label: string; text: string }[]): OutMessage {
+export function withButtons(text: string, buttons: { label: string; text: string }[]): TextMessage {
   return {
     type: "text",
     text,
