@@ -40,15 +40,28 @@ export interface FlexMessage {
 
 interface QuickReplyItem {
   type: "action";
-  action: { type: "message"; label: string; text: string };
+  action: QuickAction;
 }
 
-export function withButtons(text: string, buttons: { label: string; text: string }[]): TextMessage {
+/** 小さなボタン。文を送る／カメラを開く／写真を選ぶ／ページを開く */
+export type QuickAction =
+  | { type: "message"; label: string; text: string }
+  | { type: "camera"; label: string }
+  | { type: "cameraRoll"; label: string }
+  | { type: "uri"; label: string; uri: string };
+
+export type QuickButton = { label: string; text: string } | QuickAction;
+
+/** 前のやり取りを隠さない小さなボタン（クイックリプライ）。13個まで、label は20字まで */
+export function withButtons(text: string, buttons: QuickButton[]): TextMessage {
   return {
     type: "text",
     text,
     quickReply: {
-      items: buttons.map((b) => ({ type: "action", action: { type: "message", ...b } })),
+      items: buttons.slice(0, 13).map((b) => ({
+        type: "action",
+        action: "type" in b ? b : { type: "message", label: b.label, text: b.text },
+      })),
     },
   };
 }

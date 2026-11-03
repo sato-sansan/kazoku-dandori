@@ -9,7 +9,7 @@ export default {
     const url = new URL(request.url);
 
     // 家族のカレンダー。長い合言葉を知っている人だけ。ログインはない
-    const cal = /^\/cal\/([a-f0-9]{32})(\.ics|\/photo\/(\d+))?$/.exec(url.pathname);
+    const cal = /^\/c\/([a-z0-9]{10})(\.ics|\/photo\/(\d+))?$/.exec(url.pathname);
     if (cal && request.method === "GET") {
       const familyId = await env.DIRECTORY.get(env.DIRECTORY.idFromName("directory")).familyOfToken(cal[1]);
       if (!familyId) return new Response("Not Found", { status: 404 });
@@ -27,7 +27,7 @@ export default {
       }
       const view = url.searchParams.get("view") === "month" ? "month" : "week";
       const anchor = url.searchParams.get("anchor") ?? undefined;
-      return new Response(await family.calendarPage(`${url.origin}/cal/${cal[1]}`, view, anchor), {
+      return new Response(await family.calendarPage(`${url.origin}/c/${cal[1]}`, view, anchor), {
         headers: { ...noStore, "Content-Type": "text/html; charset=utf-8" },
       });
     }

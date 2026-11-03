@@ -11,7 +11,7 @@ import { renderCalendar, renderIcs } from "./calendar";
 import { firstQuestion, type Card, type CardSource } from "./card";
 import { absenceMessages, draftAbsence, looksLikeAbsence } from "./drafts";
 import type { Env } from "./env";
-import { fetchImage, push, reply, withButtons, type LineEvent, type OutMessage } from "./line";
+import { fetchImage, push, reply, withButtons, type LineEvent, type OutMessage, type QuickButton } from "./line";
 import {
   alreadyDecidedMessage,
   askMessage,
@@ -38,11 +38,28 @@ const ASK_EVENING = "19:00";
 const ASK_MORNING = "07:00";
 const REMIND_BEFORE_MS = 30 * 60 * 1000;
 
-const GREETING = `だんどりさんです。このグループの発言と写真を読んで、予定にします。
-写真は読むために Claude へ送り、だんどりさんの中には保存しません。外への連絡を勝手に送ることはありません。
-まず、あなたがだれか教えてください。`;
+const GREETING = `だんどりさんです。家族の段取りを手伝います。
+お便りの写真や「熱で休み」の一言を読んで、予定と連絡文にします。外へは勝手に送りません。
+まず、あなたはだれですか？（下のボタン）`;
 
 const WHO_BUTTONS = ADULTS.map((name) => ({ label: name, text: `わたしは ${name}` }));
+
+/** 何をしたらいいか迷わないための入口。カメラはその場で開く */
+const MENU_BUTTONS: QuickButton[] = [
+  { type: "camera", label: "📷 お便りを撮る" },
+  { type: "cameraRoll", label: "🖼 写真を選ぶ" },
+  { label: "🚗 お迎えを頼む", text: "お迎えを頼む" },
+  { label: "🤒 休みの連絡", text: "休みの連絡" },
+  { label: "📅 予定を見る", text: "予定 見せて" },
+  { label: "❓ 使い方", text: "使い方" },
+];
+const MENU_TEXT = "何をしますか？";
+const HOW_TO = `できること
+📷 お便りの写真を送る → 予定にします（写真は残るので紙は捨ててOK）
+🤒「そうた 熱37.8 休み」→ 園・学校への連絡文
+🚗「明日17時のお迎え頼んでおいて」→ 代わりに聞きます
+📅「予定 見せて」→ 週・月のカレンダー
+🙏 引き受けた人に［ありがとう］`;
 
 interface QueuedEvent {
   familyId: string;
@@ -120,6 +137,7 @@ export class Family extends DurableObject<Env> {
         media_type TEXT NOT NULL, kind TEXT NOT NULL, created_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS recent_images (message_id TEXT PRIMARY KEY, received_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS flows (user_id TEXT PRIMARY KEY, step TEXT NOT NULL, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
     `);
   }
 
@@ -190,7 +208,8 @@ export class Family extends DurableObject<Env> {
     const { event } = queued;
     const isPrivate = event.source.type === "user";
 
-    if (event.type === "join") {
+    if (event.type === "join" || event.type === "memberJoined") {
+      // だんどりさんが入ったとき、あとから家族が入ったとき、どちらも最初の投げかけ
       await this.send(queued, [withButtons(GREETING, WHO_BUTTONS)]);
     } else if (event.type === "unsend" && event.unsend) {
       this.sql.exec(
@@ -266,11 +285,18 @@ export class Family extends DurableObject<Env> {
         Date.now(),
       );
       await this.env.DIRECTORY.get(this.env.DIRECTORY.idFromName("directory")).register(userId, queued.familyId);
-      await this.send(queued, [
-        { type: "text", text: `${role}、よろしくね。1対1でも「明日17時のお迎え頼んでおいて」と言えます。` },
-      ]);
+      await this.send(queued, [withButtons(`${role}、よろしくね。${MENU_TEXT}`, MENU_BUTTONS)]);
       return;
     }
+
+    // 入口のメニューと使い方
+    if (/^(メニュー|めにゅー|使い方|つかいかた|ヘルプ|help)$/i.test(text)) {
+      await this.send(queued, [withButtons(/使い方|つかいかた|ヘルプ|help/i.test(text) ? HOW_TO : MENU_TEXT, MENU_BUTTONS)]);
+      return;
+    }
+
+    // ボタンで進む会話（お迎えを頼む／休みの連絡）。途中の答えはここで受ける
+    if (userId && (await this.continueFlow(queued, userId, text))) return;
 
     // 名前ボタン：先に押した人で確定
     const accept = parseAccept(text);
@@ -305,13 +331,35 @@ export class Family extends DurableObject<Env> {
     }
 
     // 「予定 見せて」「カレンダー」→ 合言葉つきの URL（ログインなし）
-    if (/^(予定|カレンダー)[\s　]*(見せて|みせて|教えて|おしえて)?$/.test(text)) {
+    if (/^(予定|カレンダー)[\s　]*(見せて|みせて|教えて|おしえて|を見る)?$/.test(text)) {
       const token = await this.calendarToken(queued.familyId);
-      const base = `https://kazoku-dandori.dandori.workers.dev/cal/${token}`;
+      const base = `https://kazoku-dandori.dandori.workers.dev/c/${token}`;
+      // URL は見せず、ボタンで開く。Google カレンダー用の購読 URL はコピーで渡す
       await this.send(queued, [
         {
-          type: "text",
-          text: `わが家の予定（週・月）はこちら。家族以外に送らないでください。\n${base}\n\nGoogleカレンダーに入れるときは、この URL を「URL で追加」に貼ります。\n${base}.ics`,
+          type: "flex",
+          altText: "わが家の予定（週・月）",
+          contents: {
+            type: "bubble",
+            size: "kilo",
+            body: {
+              type: "box",
+              layout: "vertical",
+              spacing: "sm",
+              paddingAll: "12px",
+              contents: [
+                { type: "text", text: "わが家の予定", weight: "bold", size: "md" },
+                { type: "text", text: "家族だけのページです。外に送らないでください。", size: "xs", color: "#666666", wrap: true },
+                { type: "button", style: "primary", height: "sm", action: { type: "uri", label: "📅 カレンダーを開く", uri: base } },
+                {
+                  type: "button",
+                  style: "secondary",
+                  height: "sm",
+                  action: { type: "clipboard", label: "Googleカレンダー用URLをコピー", clipboardText: `${base}.ics` },
+                },
+              ],
+            },
+          },
         },
       ]);
       return;
@@ -544,8 +592,8 @@ export class Family extends DurableObject<Env> {
     const token = await this.calendarToken(queued.familyId);
     const messages: OutMessage[] = rows.map((row) => ({
       type: "image" as const,
-      originalContentUrl: `https://kazoku-dandori.dandori.workers.dev/cal/${token}/photo/${row.id}`,
-      previewImageUrl: `https://kazoku-dandori.dandori.workers.dev/cal/${token}/photo/${row.id}`,
+      originalContentUrl: `https://kazoku-dandori.dandori.workers.dev/c/${token}/photo/${row.id}`,
+      previewImageUrl: `https://kazoku-dandori.dandori.workers.dev/c/${token}/photo/${row.id}`,
     }));
     await this.send(queued, messages);
   }
@@ -723,15 +771,122 @@ export class Family extends DurableObject<Env> {
     } else if (type === "weekly_card") await this.sendWeeklyCard();
   }
 
+  // ── ボタンで進む会話（選ばせる。文を考えさせない） ──────────
+
+  /** 進行中の会話があれば1歩進めて true。「お迎えを頼む」「休みの連絡」の入口もここ */
+  private async continueFlow(queued: QueuedEvent, userId: string, text: string): Promise<boolean> {
+    const today = jstDate();
+    const profile = loadProfile(this.env.FAMILY_PROFILE);
+    const row = this.sql.exec<{ step: string; data: string }>("SELECT step, data FROM flows WHERE user_id = ?", userId).toArray()[0];
+    const data = row ? (JSON.parse(row.data) as Record<string, string>) : {};
+    const set = (step: string, patch: Record<string, string>) =>
+      this.sql.exec(
+        "INSERT OR REPLACE INTO flows (user_id, step, data, updated_at) VALUES (?, ?, ?, ?)",
+        userId,
+        step,
+        JSON.stringify({ ...data, ...patch }),
+        Date.now(),
+      );
+    const done = () => this.sql.exec("DELETE FROM flows WHERE user_id = ?", userId);
+
+    if (/^(やめる|キャンセル|取り消し)$/.test(text) && row) {
+      done();
+      await this.send(queued, [withButtons("やめました。", MENU_BUTTONS)]);
+      return true;
+    }
+
+    // 入口
+    if (/^お迎えを頼む$/.test(text)) {
+      set("pickup.day", {});
+      await this.send(queued, [
+        withButtons("いつのお迎え？", [
+          { label: "今日", text: "今日" },
+          { label: "明日", text: "明日" },
+          { label: "やめる", text: "やめる" },
+        ]),
+      ]);
+      return true;
+    }
+    if (/^休みの連絡$/.test(text)) {
+      set("absence.child", {});
+      await this.send(queued, [
+        withButtons("どの子が休みますか？", [
+          ...profile.children.map((c) => ({ label: c.name, text: c.name })),
+          { label: "やめる", text: "やめる" },
+        ]),
+      ]);
+      return true;
+    }
+    if (!row) return false;
+
+    // 途中の答え。10分たった会話は捨てる
+    if (row.step === "pickup.day" && /^(今日|明日)$/.test(text)) {
+      set("pickup.time", { day: text });
+      await this.send(queued, [
+        withButtons("何時？", [
+          { label: "17:30", text: "17:30" },
+          { label: "17:00", text: "17:00" },
+          { label: "18:00", text: "18:00" },
+          { label: "今すぐ", text: "今すぐ" },
+          { label: "やめる", text: "やめる" },
+        ]),
+      ]);
+      return true;
+    }
+    if (row.step === "pickup.time" && /^(\d{1,2}:\d{2}|今すぐ)$/.test(text)) {
+      done();
+      const date = data.day === "今日" ? today : addDays(today, 1);
+      const time = text === "今すぐ" ? jstTime() : text.padStart(5, "0");
+      const role = this.roleOf(userId);
+      const slot = this.findOrCreateSlot(date, time, "迎え", "グループ");
+      if (slot.status === "決定") {
+        await this.send(queued, [{ type: "text", text: `${describeSlot(slot, today)}は、${slot.who}に決まっています。` }]);
+        return true;
+      }
+      this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = 'グループ' WHERE id = ?", slot.id);
+      await this.send(queued, [askMessage({ ...slot, time, status: "お願い中" }, { exclude: role ?? undefined })]);
+      return true;
+    }
+    if (row.step === "absence.child" && profile.children.some((c) => c.name === text)) {
+      set("absence.reason", { child: text });
+      await this.send(queued, [
+        withButtons("理由は？", [
+          { label: "熱", text: "熱" },
+          { label: "体調不良", text: "体調不良" },
+          { label: "家庭の都合", text: "家庭の都合" },
+          { label: "通院", text: "通院" },
+          { label: "やめる", text: "やめる" },
+        ]),
+      ]);
+      return true;
+    }
+    if (row.step === "absence.reason") {
+      done();
+      const draft = await draftAbsence(this.env.ANTHROPIC_API_KEY, {
+        text: `${data.child} ${text} 今日休み`,
+        profile,
+        today,
+      });
+      console.log(JSON.stringify({ step: "absence", attends: draft.attends, ask: !!draft.ask, via: "buttons" }));
+      await this.send(queued, absenceMessages(draft));
+      return true;
+    }
+    // 会話の途中で別の話が来たら、会話は捨てて普通に処理する
+    done();
+    return false;
+  }
+
   // ── カレンダー（週・月のページと、購読用の ICS） ─────────────
 
   /** 合言葉は家族ごとに1つ。なければ作って Directory に登録する */
   private async calendarToken(familyId: string) {
     const row = this.sql.exec("SELECT value FROM settings WHERE key = 'cal_token'").toArray()[0];
-    if (row) return row.value as string;
-    const bytes = crypto.getRandomValues(new Uint8Array(16));
-    const token = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-    this.sql.exec("INSERT INTO settings (key, value) VALUES ('cal_token', ?)", token);
+    if (row && (row.value as string).length === 10) return row.value as string;
+    // 10文字（英小文字と数字）。当てずっぽうでは開けない長さで、口で伝えられる短さ
+    const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+    const bytes = crypto.getRandomValues(new Uint8Array(10));
+    const token = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+    this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('cal_token', ?)", token);
     await this.env.DIRECTORY.get(this.env.DIRECTORY.idFromName("directory")).registerToken(token, familyId);
     return token;
   }

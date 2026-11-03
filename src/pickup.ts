@@ -86,32 +86,33 @@ export function askMessage(slot: Slot, options?: { exclude?: Adult; retry?: bool
   // 「今日・明日」は today がないと間違えるので、日付そのものを出す
   const when = `${shortDate(slot.date)} ${slot.time}`;
   const what = `${whose(slot)}の${word}`;
-  const lines = options?.retry ? ["まだ決まっていません", when, what, "行ける人？"] : [when, what, "行ける人？"];
+  const head = options?.retry ? `まだ決まっていません ${when}` : when;
   // exclude は頼んだ人。理由は書かない（だれが頼んだか出さない）
   const buttons = ADULTS.filter((a) => a !== options?.exclude).map((name) => ({
     type: "button",
     style: "primary",
-    height: "md",
+    height: "sm",
     action: { type: "message", label: name, text: `${word}引受 #${slot.id} ${name}` },
   }));
+  // 縦に長いと前のやり取りが隠れる。小さめの1枚に、ボタンは横並び（4つなら2段）
+  const rows = [buttons.slice(0, 2), buttons.slice(2)].filter((r) => r.length > 0);
   return {
     type: "flex",
     altText: `${when} ${what}、行ける人？`,
     contents: {
       type: "bubble",
+      size: "kilo",
       body: {
         type: "box",
         layout: "vertical",
-        spacing: "md",
-        contents: lines.map((text, i) => ({
-          type: "text",
-          text,
-          wrap: true,
-          size: "lg",
-          weight: i === lines.length - 1 ? "bold" : "regular",
-        })),
+        spacing: "xs",
+        paddingAll: "12px",
+        contents: [
+          { type: "text", text: head, size: "sm", color: "#666666", wrap: true },
+          { type: "text", text: `${what}、行ける人？`, size: "md", weight: "bold", wrap: true },
+          ...rows.map((row) => ({ type: "box", layout: "horizontal", spacing: "sm", margin: "sm", contents: row })),
+        ],
       },
-      footer: { type: "box", layout: "vertical", spacing: "sm", contents: buttons },
     },
   };
 }
