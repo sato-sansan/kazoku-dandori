@@ -8,4 +8,5 @@ export interface Env {
   FAMILY_PROFILE?: string;
   FAMILY: DurableObjectNamespace<Family>;
   DIRECTORY: DurableObjectNamespace<Directory>;
+  PHOTOS: R2Bucket;
 }

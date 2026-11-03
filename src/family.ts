@@ -114,6 +114,12 @@ export class Family extends DurableObject<Env> {
         UNIQUE (due_at, type, payload)
       );
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS photos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL, message_id TEXT, date TEXT NOT NULL, label TEXT NOT NULL,
+        media_type TEXT NOT NULL, kind TEXT NOT NULL, created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS recent_images (message_id TEXT PRIMARY KEY, received_at INTEGER NOT NULL);
     `);
   }
 
@@ -191,10 +197,18 @@ export class Family extends DurableObject<Env> {
         "UPDATE batches SET cards = '[]', status = 'removed', awaiting = NULL WHERE message_id = ?",
         event.unsend.messageId,
       );
+      // 送信取消なら、残していた写真も消す
+      await this.deletePhotosOf(event.unsend.messageId);
     } else if (event.type === "message" && event.message?.type === "image") {
       if (isPrivate) return;
       const image = await fetchImage(this.env.LINE_CHANNEL_ACCESS_TOKEN, event.message.id);
-      if (image) await this.read(queued, { image }, "写真");
+      if (!image) return;
+      // 「この写真 残して」が続くかもしれないので、しばらく覚えておく（中身は持たない）
+      this.sql.exec("DELETE FROM recent_images WHERE received_at < ?", Date.now() - 10 * 60 * 1000);
+      this.sql.exec("INSERT OR REPLACE INTO recent_images (message_id, received_at) VALUES (?, ?)", event.message.id, Date.now());
+      const saved = await this.read(queued, { image }, "写真");
+      // お便りなら写真を残す。紙を捨てられるように
+      if (saved) await this.savePhoto(queued.familyId, event.message.id, image, saved.date, saved.label, "お便り");
     } else if (event.type === "message" && event.message?.type === "text") {
       const text = (event.message.text ?? "").trim();
       if (isPrivate) await this.handlePrivate(queued, text);
@@ -276,6 +290,17 @@ export class Family extends DurableObject<Env> {
     const button = /^(OK|直す) #(\d+)$/.exec(text);
     if (button) {
       await this.confirmBatch(queued, button[1], button[2]);
+      return;
+    }
+
+    // 写真：「この写真 残して」／「学芸会のお便り見せて」
+    if (/^(この)?写真[\s　]*(を)?[\s　]*(残して|のこして|とっておいて)$/.test(text)) {
+      await this.keepRecentPhoto(queued);
+      return;
+    }
+    const show = /^(.+?)の(お便り|おたより|写真|プリント)[\s　]*(見せて|みせて|出して|だして)$/.exec(text);
+    if (show) {
+      await this.showPhoto(queued, show[1].trim());
       return;
     }
 
@@ -370,7 +395,12 @@ export class Family extends DurableObject<Env> {
 
   // ── 芯A：読んで、聞く ─────────────────────────────────
 
-  private async read(queued: QueuedEvent, input: Pick<ReadInput, "text" | "image">, source: CardSource) {
+  /** お便りと判断して返事をしたら、写真を残すための日付と題名を返す。雑談なら null */
+  private async read(
+    queued: QueuedEvent,
+    input: Pick<ReadInput, "text" | "image">,
+    source: CardSource,
+  ): Promise<{ date: string; label: string } | null> {
     // 文は聞き返しや直しへの答えかもしれない。新しい写真は別の連絡として読む
     const awaiting = input.text
       ? this.sql
@@ -396,7 +426,7 @@ export class Family extends DurableObject<Env> {
       }),
     );
     // 雑談には黙っている
-    if (!result.is_notice || result.cards.length === 0) return;
+    if (!result.is_notice || result.cards.length === 0) return null;
 
     // 聞き返しへの答えなら前のカードと入れ替える。別の子の別の連絡なら、前のカードはそのまま残す
     if (awaiting) {
@@ -432,6 +462,101 @@ export class Family extends DurableObject<Env> {
             { label: "直す", text: `直す #${batch.id}` },
           ]),
     ]);
+    const first = result.cards[0];
+    return { date: first.date ?? jstDate(), label: first.title };
+  }
+
+  // ── 写真（お便りは自動で、家族の写真は「残して」と言ったものだけ） ──
+
+  private async savePhoto(
+    familyId: string,
+    messageId: string,
+    image: { mediaType: string; data: string },
+    date: string,
+    label: string,
+    kind: "お便り" | "家族",
+  ) {
+    const ext = image.mediaType.split("/")[1] ?? "jpg";
+    const key = `${familyId}/${date}/${messageId}.${ext}`;
+    const bytes = Uint8Array.from(atob(image.data), (c) => c.charCodeAt(0));
+    try {
+      await this.env.PHOTOS.put(key, bytes, { httpMetadata: { contentType: image.mediaType } });
+    } catch (error) {
+      console.error("photo save failed", error instanceof Error ? error.message : "");
+      await this.pushToGroup([{ type: "text", text: "写真を残せませんでした。紙はまだ捨てないでください。" }]);
+      return;
+    }
+    this.sql.exec(
+      "INSERT INTO photos (key, message_id, date, label, media_type, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      key,
+      messageId,
+      date,
+      label,
+      image.mediaType,
+      kind,
+      Date.now(),
+    );
+  }
+
+  private async deletePhotosOf(messageId: string) {
+    const rows = this.sql.exec("SELECT id, key FROM photos WHERE message_id = ?", messageId).toArray();
+    for (const row of rows) {
+      await this.env.PHOTOS.delete(row.key as string).catch(() => console.error("photo delete failed"));
+      this.sql.exec("DELETE FROM photos WHERE id = ?", row.id);
+    }
+  }
+
+  /** 「この写真 残して」：直前（10分以内）の写真を家族の写真として残す */
+  private async keepRecentPhoto(queued: QueuedEvent) {
+    const recent = this.sql
+      .exec("SELECT message_id FROM recent_images ORDER BY received_at DESC LIMIT 1")
+      .toArray()[0];
+    if (!recent) {
+      await this.send(queued, [{ type: "text", text: "残す写真が見つかりません。写真を送ってから「この写真 残して」と言ってください。" }]);
+      return;
+    }
+    const messageId = recent.message_id as string;
+    if (this.sql.exec("SELECT id FROM photos WHERE message_id = ?", messageId).toArray().length > 0) {
+      await this.send(queued, [{ type: "text", text: "その写真はもう残してあります。" }]);
+      return;
+    }
+    const image = await fetchImage(this.env.LINE_CHANNEL_ACCESS_TOKEN, messageId);
+    if (!image) {
+      await this.send(queued, [{ type: "text", text: "写真を取り出せませんでした。もう一度送ってから言ってください。" }]);
+      return;
+    }
+    await this.savePhoto(queued.familyId, messageId, image, jstDate(), "家族の写真", "家族");
+    await this.send(queued, [{ type: "text", text: "残しました。カレンダーの今日の日付から見られます。" }]);
+  }
+
+  /** 「学芸会のお便り見せて」：題名で探して LINE に再送 */
+  private async showPhoto(queued: QueuedEvent, word: string) {
+    const rows = this.sql
+      .exec<{ id: number; label: string; date: string }>(
+        "SELECT id, label, date FROM photos WHERE label LIKE ? ORDER BY created_at DESC LIMIT 3",
+        `%${word}%`,
+      )
+      .toArray();
+    if (rows.length === 0) {
+      await this.send(queued, [{ type: "text", text: `「${word}」のお便りは見つかりませんでした。` }]);
+      return;
+    }
+    const token = await this.calendarToken(queued.familyId);
+    const messages: OutMessage[] = rows.map((row) => ({
+      type: "image" as const,
+      originalContentUrl: `https://kazoku-dandori.dandori.workers.dev/cal/${token}/photo/${row.id}`,
+      previewImageUrl: `https://kazoku-dandori.dandori.workers.dev/cal/${token}/photo/${row.id}`,
+    }));
+    await this.send(queued, messages);
+  }
+
+  /** カレンダーのページから写真を出す。合言葉の確認は Worker 側 */
+  async photo(id: number): Promise<{ body: ReadableStream; contentType: string } | null> {
+    const row = this.sql.exec("SELECT key, media_type FROM photos WHERE id = ?", id).toArray()[0];
+    if (!row) return null;
+    const object = await this.env.PHOTOS.get(row.key as string);
+    if (!object) return null;
+    return { body: object.body, contentType: row.media_type as string };
   }
 
   private async confirmBatch(queued: QueuedEvent, action: string, id: string) {
@@ -619,7 +744,10 @@ export class Family extends DurableObject<Env> {
       anchor: anchor && /^\d{4}-\d{2}-\d{2}$/.test(anchor) ? anchor : today,
       cards: this.okCards(),
       slots: this.allSlots(),
-      photos: [],
+      photos: this.sql
+        .exec<{ id: number; date: string; label: string }>("SELECT id, date, label FROM photos ORDER BY date")
+        .toArray()
+        .map((row) => ({ date: row.date, label: row.label, url: `${baseUrl}/photo/${row.id}` })),
       baseUrl,
     });
   }

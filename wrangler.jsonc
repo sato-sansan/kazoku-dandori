@@ -13,5 +13,7 @@
     { "tag": "v1", "new_sqlite_classes": ["Family"] },
     { "tag": "v2", "new_sqlite_classes": ["Directory"] }
   ],
+  // お便りの写真と「残して」と言われた写真。家族ごとのフォルダ。外から直接は開けない
+  "r2_buckets": [{ "binding": "PHOTOS", "bucket_name": "kazoku-dandori-photos" }],
   "observability": { "enabled": true }
 }

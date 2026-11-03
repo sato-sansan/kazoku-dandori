@@ -15,7 +15,14 @@ export interface LineEvent {
   unsend?: { messageId: string };
 }
 
-export type OutMessage = TextMessage | FlexMessage;
+export type OutMessage = TextMessage | FlexMessage | ImageMessage;
+
+/** 残してある写真を再送するとき。URL は https で、LINE 側が取りに来る */
+export interface ImageMessage {
+  type: "image";
+  originalContentUrl: string;
+  previewImageUrl: string;
+}
 
 export interface TextMessage {
   type: "text";
