@@ -1,0 +1,25 @@
+# 秘密（APIキー・LINEのシークレット／トークン）はここと Cloudflare の secret だけに置く
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+
+# 実物のお便り・連絡アプリの画面（子どもの情報）。公開しない
+eval/private/*
+!eval/private/.gitkeep
+
+# 子どもの本名などの止め語リスト（フックが読む。公開しない）
+.claude/private/
+
+# 依存・ビルド・ツールの一時ファイル
+node_modules/
+dist/
+.wrangler/
+coverage/
+*.log
+
+# OS・エディタ
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

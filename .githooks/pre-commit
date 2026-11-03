@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# git のコミット前フック。有効化: git config core.hooksPath .githooks （scripts/setup.sh がやる）
+exec bash "$(git rev-parse --show-toplevel)/scripts/check-commit.sh"
