@@ -1445,6 +1445,8 @@ export class Family extends DurableObject<Env> {
       const key = `reminded.${slot.id}`;
       if (this.sql.exec("SELECT 1 FROM settings WHERE key = ?", key).toArray().length > 0) return;
       if (dueAt !== null && Math.abs(dueAt - (jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS)) > 5 * 60 * 1000) return;
+      // 決まっていない朝の枠は、7:00 の聞き直しが念押しを兼ねる（前からある予約でも同じ分に2通出さない）
+      if (slot.status !== "決定" && jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS <= jstToMs(slot.date, ASK_MORNING) + 45 * 60 * 1000) return;
       this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", key, String(Date.now()));
       if (slot.status === "決定" && slot.who) {
         // 念押しは担当の人だけに（グループ全員に送ると人数ぶん数える）。届かなくてもグループには送らない
