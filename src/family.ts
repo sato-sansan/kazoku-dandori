@@ -9,7 +9,7 @@ import {
 } from "./adventure";
 import { renderCalendar, renderIcs } from "./calendar";
 import { firstQuestion, type Card, type CardSource } from "./card";
-import { absenceMessages, draftAbsence, looksLikeAbsence } from "./drafts";
+import { absenceMessages, draftAbsence, groupAbsence, looksLikeAbsence } from "./drafts";
 import { classifyIntent, type IntentResult } from "./intent";
 import type { Env } from "./env";
 import {
@@ -24,6 +24,7 @@ import {
   pushRemaining,
   reply,
   uploadRichMenuImage,
+  useLineBase,
   withButtons,
   type LineEvent,
   type OutMessage,
@@ -36,16 +37,20 @@ import {
   askMessage,
   confirmMessages,
   dailySlots,
+  dayLabel,
   declineMessage,
   itemsMessage,
   describeSlot,
   parseAccept,
+  parseAssignment,
   parseDay,
   parseDecline,
   parseRequest,
   reminderMessage,
+  ROLE_WORDS,
   slotsFromCards,
   undecidedMessage,
+  type Assignment,
 } from "./pickup";
 import { loadProfile, type FamilyProfile } from "./profile";
 import { readNotice, type ReadInput } from "./reader";
@@ -53,7 +58,6 @@ import { addDays, jstDate, jstTime, jstToMs, jstWeekday, nextSundayEvening, week
 import { ADULTS, type Adult, type FamilyEvent, type Slot } from "./types";
 
 // 返信トークンは1分以内が目安。余裕をみて、これを過ぎたらプッシュで届ける
-const REPLY_WINDOW_MS = 50_000;
 const SEEN_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
 const ASK_EVENING = "19:00";
 const ASK_MORNING = "07:00";
@@ -98,6 +102,8 @@ interface QueuedEvent {
   familyId: string;
   event: LineEvent;
   receivedAt: number;
+  /** この発言への返事（flush で1回の返信にまとめて送る。保存はしない） */
+  outbox?: OutMessage[];
 }
 
 interface Batch extends Record<string, SqlStorageValue> {
@@ -115,6 +121,7 @@ interface SlotRow extends Record<string, SqlStorageValue> {
   who: string | null;
   status: string;
   requested_by: string | null;
+  note: string | null;
 }
 
 interface EventRow extends Record<string, SqlStorageValue> {
@@ -135,6 +142,7 @@ export class Family extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    useLineBase(env.LINE_API_BASE);
     this.sql = ctx.storage.sql;
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS inbox (id TEXT PRIMARY KEY, payload TEXT NOT NULL, received_at INTEGER NOT NULL);
@@ -172,7 +180,11 @@ export class Family extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS recent_images (message_id TEXT PRIMARY KEY, received_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS flows (user_id TEXT PRIMARY KEY, step TEXT NOT NULL, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS counts (day TEXT NOT NULL, key TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (day, key));
+      CREATE TABLE IF NOT EXISTS later (kind TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
     `);
+    // 11/4 追加：家族が行かない枠のわけ（ファミサポ・お休み）。前からある箱には列を足す
+    const cols = this.sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('slots')").toArray().map((c) => c.name);
+    if (!cols.includes("note")) this.sql.exec("ALTER TABLE slots ADD COLUMN note TEXT");
   }
 
   // ── 受け取り ───────────────────────────────────────────
@@ -210,11 +222,11 @@ export class Family extends DurableObject<Env> {
         console.error("handle failed", queued.event.type, error instanceof Error ? error.message : "");
         const type = queued.event.message?.type;
         if (type === "image" || type === "text") {
-          await this.send(queued, [
-            { type: "text", text: "いま読めませんでした。少し待って、もう一度送ってください。" },
-          ]).catch(() => console.error("failure notice failed"));
+          queued.outbox = [{ type: "text", text: "いま読めませんでした。少し待って、もう一度送ってください。" }];
         }
       }
+      // 返事は1回の返信にまとめて送る（2回目の返信がプッシュに化けて送信数を使わないように）
+      await this.flush(queued).catch((error) => console.error("flush failed", error instanceof Error ? error.message.slice(0, 120) : ""));
     }
 
     if (familyId ?? this.familyId()) {
@@ -574,6 +586,18 @@ export class Family extends DurableObject<Env> {
       return;
     }
 
+    // 聞き返しに「ちがう」だけ：何が正しいかは読み直しても分からない。正しい形をひとことで聞く
+    // （11/4：「ちがう」がどの問いへの答えか分からず、問いが続いた）
+    const pendingAsk = this.sql
+      .exec<{ id: number }>("SELECT id FROM batches WHERE awaiting = 'ask' AND status = 'pending' ORDER BY id DESC LIMIT 1")
+      .toArray()[0];
+    if (pendingAsk && /^(ちがう|違う|ちがいます|違います|いいえ)[。！!]?$/.test(text)) {
+      // 'fix2'＝聞き返しのあとの直し。次の答えでは、もう聞き返さない
+      this.sql.exec("UPDATE batches SET awaiting = 'fix2' WHERE id = ?", pendingAsk.id);
+      await this.send(queued, [{ type: "text", text: "正しくは？ひとことで送ってください。（例：16日です／18:30です）" }]);
+      return;
+    }
+
     // 写真：「この写真 残して」／「学芸会のお便り見せて」
     // 「この写真 残して」「思い出に入れておいて」「この写真 ○○と△△の成長記録にしておいて」。成長記録は子どもの名前つきで家のページに並ぶ
     if (wantsToKeepPhoto(text)) {
@@ -626,13 +650,45 @@ export class Family extends DurableObject<Env> {
       await this.askForDate(addDays(today, 1), false, queued);
       return;
     }
+    // 確認と撮影用：「段取り 念押し」で、次の送り迎えの念押しを今（返信で）出す
+    if (/^段取り[\s：:]*念押し$/.test(text)) {
+      const now = jstTime();
+      const next = this.slotsOf([today, addDays(today, 1)]).find((s) => s.status !== "取消" && (s.date > today || s.time >= now));
+      await this.send(queued, [
+        next ? (next.status === "決定" ? reminderMessage(next) : undecidedMessage(next)) : { type: "text", text: "これからの送り迎えはありません。" },
+      ]);
+      return;
+    }
     if (/^段取り[\s：:]*数字$/.test(text)) {
-      await this.send(queued, [{ type: "text", text: this.numbersText() }]);
+      // LINE の今月の残り（管理画面の数字は遅れることがあるので、ここで直接確かめられるように）
+      const left = await pushRemaining(this.env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => null);
+      const quota = left === null ? "読めませんでした" : left === Infinity ? "上限なし" : `${left}通`;
+      await this.send(queued, [{ type: "text", text: `${this.numbersText()}\nLINE の今月の残り：${quota}` }]);
       return;
     }
     if (/^段取り[\s：:]*冒険$/.test(text)) {
       await this.sendWeeklyCard(queued);
       return;
+    }
+
+    // 決まった報告：「明日5時迎えばーばになりました」「28日土曜お迎え パパ」「5日はファミサポにお迎え頼みました」「16日は全員お休み」
+    // 確認の問いにせず、その日の枠にすぐ入れて1行で返す（11/4：報告が読み取りに回り、確認の問いが10往復した）
+    const assigned = parseAssignment(text, today, this.recentAssignDate());
+    if (assigned) {
+      await this.applyAssignment(queued, assigned, today, text);
+      return;
+    }
+
+    // 「白紙にして」「取り消して」：確かめ中の内容（まだ［OK］していない読み取り）を入れずに消す
+    if (/白紙|取り消して|取消して|なしにして|無しにして|全部消して|入れないで/.test(text)) {
+      const pending = this.sql
+        .exec<{ id: number }>("SELECT id FROM batches WHERE status = 'pending' AND created_at > ?", Date.now() - 3 * 60 * 60 * 1000)
+        .toArray();
+      if (pending.length > 0) {
+        for (const b of pending) this.sql.exec("UPDATE batches SET status = 'removed', awaiting = NULL WHERE id = ?", b.id);
+        await this.send(queued, [{ type: "text", text: "確かめ中だった内容は、入れずに消しました。" }]);
+        return;
+      }
     }
 
     // 「ママに頼んで」「@ばあば にお願いして」「5日の朝の送り じいじに依頼して」→ その人に名指しで聞く
@@ -737,16 +793,115 @@ export class Family extends DurableObject<Env> {
     if (!saved && called) await this.send(queued, [withButtons(NOT_UNDERSTOOD, MENU_BUTTONS)]);
   }
 
-  /** 「熱で休み」→ 相手ごとの連絡文の下書き（［コピー］［📞 電話］） */
+  /** 30分以内に報告があった日。「ファミサポは18:30迎えです」のような続きを、その日のこととして読む */
+  private recentAssignDate(): string | null {
+    const row = this.sql.exec("SELECT value FROM settings WHERE key = 'assign.recent'").toArray()[0];
+    if (!row) return null;
+    const { date, at } = JSON.parse(row.value as string) as { date: string; at: number };
+    return Date.now() - at < 30 * 60 * 1000 ? date : null;
+  }
+
+  /** その日・その種類の枠（無ければ毎日の枠の形で作る）。保育所の枠を先に */
+  private slotFor(date: string, kind: Slot["kind"], time: string | null): Slot {
+    const same = this.slotsOf([date]).filter((s) => s.kind === kind && s.status !== "取消");
+    const found = same.find((s) => s.place === "保育所") ?? same[0];
+    if (found) return found;
+    const fallback = kind === "迎え" ? "17:30" : "07:30";
+    return this.findOrCreateSlot(date, time ?? fallback, kind, "グループ");
+  }
+
+  /**
+   * 決まった報告を枠に入れて、短く返す。家族のだれかなら「決定」（引き受けとして数え、［ありがとう］と念押し）、
+   * ファミサポ・お休みなら「不要」（19:00 の「行ける人？」も念押しも出さない）
+   */
+  private async applyAssignment(queued: QueuedEvent, list: Assignment[], today: string, text: string) {
+    const lines: string[] = [];
+    const extra: OutMessage[] = [];
+    for (const a of list) {
+      const slot = this.slotFor(a.date, a.kind, a.time);
+      const time = a.time ?? slot.time;
+      if (a.who) {
+        const same = slot.status === "決定" && slot.who === a.who && slot.time === time;
+        this.sql.exec("UPDATE slots SET time = ?, who = ?, status = '決定', note = NULL WHERE id = ?", time, a.who, slot.id);
+        const decided: Slot = { ...slot, time, who: a.who, status: "決定", note: undefined };
+        const said = describeSlot(decided, today);
+        lines.push(`✅ ${said}は ${a.who}。`);
+        if (same) continue;
+        const kind = slot.date === today ? "急な引受" : "引受";
+        const ev = this.sql
+          .exec<{ id: number }>("INSERT INTO events (at, kind, who, slot_id, note) VALUES (?, ?, ?, ?, ?) RETURNING id", Date.now(), kind, a.who, slot.id, said)
+          .one();
+        extra.push(thanksPrompt({ id: ev.id, at: Date.now(), kind, who: a.who, slotId: slot.id, note: said }));
+        // 担当が変わったら念押しはやり直し（1回だけ）
+        this.sql.exec("DELETE FROM settings WHERE key = ?", `reminded.${slot.id}`);
+        this.addReminder(decided);
+      } else {
+        this.sql.exec("UPDATE slots SET time = ?, who = NULL, status = '不要', note = ? WHERE id = ?", time, a.note, slot.id);
+        this.sql.exec("DELETE FROM jobs WHERE type = 'reminder' AND (payload = ? OR payload LIKE ?)", String(slot.id), `${slot.id}|%`);
+        if (a.note !== "お休み") lines.push(`✅ ${describeSlot({ ...slot, time }, today, a.time !== null)}は ${a.note}。家族に「行ける人？」は聞きません。`);
+      }
+    }
+    // 全員お休み：1行にまとめ、だんどり帳にも「お休み」を出す。連絡文は頼まれたら（「都合」「連絡」と書いてあれば）すぐ作る
+    const off = list.filter((a) => a.note === "お休み");
+    const buttons: QuickButton[] = [];
+    if (off.length > 0) {
+      const date = off[0].date;
+      lines.unshift(`✅ ${dayLabel(date, today)}は${off.length >= 2 ? "全員お休み" : `${off[0].kind === "迎え" ? "お迎え" : "送り"}なし`}。送り迎えの「行ける人？」は聞きません。`);
+      if (off.length >= 2) {
+        const card: Card = {
+          child: "全員", kind: "欠席", title: "お休み", date, time: null, place: null, deadline: null,
+          items: [], money: null, who_acts: "未定", confidence: "高", ask: null,
+        };
+        this.sql.exec(
+          "INSERT INTO batches (message_id, source, cards, status, awaiting, created_at) VALUES (?, 'ひとこと', ?, 'ok', NULL, ?)",
+          queued.event.message?.id ?? null,
+          JSON.stringify([{ ...card, source: "ひとこと" }]),
+          Date.now(),
+        );
+        const drafts = groupAbsence(text, this.profile(), today, date);
+        if (drafts && /都合|連絡|理由|欠席/.test(text)) {
+          this.count("連絡文の下書き");
+          extra.unshift(...drafts.flatMap((d) => absenceMessages(d, this.profile().contacts)));
+        } else if (drafts) {
+          buttons.push({ label: "🤒 連絡文を作る", text: `休みの連絡 ${dayLabel(date, today).replace(/（.）/, "")} 全員` });
+        }
+      }
+    }
+    this.sql.exec(
+      "INSERT OR REPLACE INTO settings (key, value) VALUES ('assign.recent', ?)",
+      JSON.stringify({ date: list[0].date, at: Date.now() }),
+    );
+    console.log(JSON.stringify({ step: "assign", n: list.length, who: list.some((a) => a.who), note: list.some((a) => a.note) }));
+    this.count("決まった報告");
+    const head = `${lines.join("\n")}\nだんどり帳に入れました。`;
+    const first: OutMessage = buttons.length > 0 ? withButtons(head, buttons) : { type: "text", text: head };
+    await this.send(queued, [first, ...extra].slice(0, 5));
+  }
+
+  /** 「熱で休み」→ 相手ごとの連絡文の下書き（［コピー］［📞 電話］）。「全員」「3人とも」は通い先ごとにまとめて作る */
   private async absence(queued: QueuedEvent, text: string, today: string) {
-    const draft = await draftAbsence(this.env.ANTHROPIC_API_KEY, {
-      text,
-      profile: this.profile(),
-      today,
-    });
+    const profile = this.profile();
+    const group = groupAbsence(text, profile, today, parseDay(text, today) ?? today);
+    if (group) {
+      console.log(JSON.stringify({ step: "absence", group: group.length }));
+      this.count("連絡文の下書き");
+      await this.send(queued, group.flatMap((d) => absenceMessages(d, profile.contacts)).slice(0, 5));
+      return;
+    }
+    const draft = await draftAbsence(this.env.ANTHROPIC_API_KEY, { text, profile, today });
     console.log(JSON.stringify({ step: "absence", attends: draft.attends, ask: !!draft.ask }));
     this.count("連絡文の下書き");
-    await this.send(queued, absenceMessages(draft, this.profile().contacts));
+    // 聞き返したら、次のひとことは最初の文に足して読み直す（「全員です」だけを別の話として読まない）
+    const userId = queued.event.source.userId;
+    if (draft.ask && userId) {
+      this.sql.exec(
+        "INSERT OR REPLACE INTO flows (user_id, step, data, updated_at) VALUES (?, 'absence.ask', ?, ?)",
+        userId,
+        JSON.stringify({ text }),
+        Date.now(),
+      );
+    }
+    await this.send(queued, absenceMessages(draft, profile.contacts));
   }
 
   /**
@@ -840,10 +995,14 @@ export class Family extends DurableObject<Env> {
     input: Pick<ReadInput, "text" | "image">,
     source: CardSource,
   ): Promise<{ date: string; label: string } | null> {
-    // 文は聞き返しや直しへの答えかもしれない。新しい写真は別の連絡として読む
+    // 文は聞き返しや直しへの答えかもしれない。新しい写真は別の連絡として読む。
+    // 3時間たった聞き返しは引きずらない（11/4：前日の写真の問いに、翌朝の報告が答えとして読まれた）
+    this.sql.exec("UPDATE batches SET awaiting = NULL WHERE awaiting IS NOT NULL AND created_at < ?", Date.now() - 3 * 60 * 60 * 1000);
     const awaiting = input.text
       ? this.sql
-          .exec<Batch>("SELECT id, cards FROM batches WHERE awaiting IS NOT NULL AND status = 'pending' ORDER BY id DESC LIMIT 1")
+          .exec<Batch & { awaiting: string }>(
+            "SELECT id, cards, awaiting FROM batches WHERE awaiting IS NOT NULL AND status = 'pending' ORDER BY id DESC LIMIT 1",
+          )
           .toArray()[0]
       : undefined;
 
@@ -868,28 +1027,39 @@ export class Family extends DurableObject<Env> {
     if (!result.is_notice || result.cards.length === 0) return null;
 
     // 聞き返しへの答えなら前のカードと入れ替える。別の子の別の連絡なら、前のカードはそのまま残す
-    if (awaiting) {
-      const before = JSON.parse(awaiting.cards) as Card[];
-      const related = result.cards.some((card) => before.some((b) => b.child === card.child));
-      if (related) this.sql.exec("UPDATE batches SET status = 'replaced', awaiting = NULL WHERE id = ?", awaiting.id);
-    }
-    const question = firstQuestion(result.cards);
+    const before = awaiting ? (JSON.parse(awaiting.cards) as Card[]) : [];
+    // 前の問いへの答えか：同じ子・同じ題名がある、または短い一言（「11/16です」で子が「未定」→「はると」に変わっても答え）
+    const related = awaiting
+      ? (input.text ?? "").length <= 30 || result.cards.some((card) => before.some((b) => b.child === card.child || b.title === card.title))
+      : false;
+    if (awaiting && related) this.sql.exec("UPDATE batches SET status = 'replaced', awaiting = NULL WHERE id = ?", awaiting.id);
+    // 自由な文での聞き返しは1回まで（docs/brand.md）。答えのあとは聞かずに［OK］［直す］。分からない所は「日にち未定」のまま
+    const answering = awaiting && related && (awaiting.awaiting === "ask" || awaiting.awaiting === "fix2");
+    const asked = answering ? null : firstQuestion(result.cards);
+    // 問いは1つ。カードに残すのも、聞いた1つだけ（次の「ちがう」がどの問いへの答えか迷わないように）
+    let kept = false;
+    const cards = result.cards.map((card) => {
+      const keep = !!asked && !kept && card.ask === asked;
+      if (keep) kept = true;
+      return { ...card, ask: keep ? card.ask : null, source };
+    });
+    const question = asked;
     const batch = this.sql
       .exec<{ id: number }>(
         `INSERT INTO batches (message_id, source, cards, status, awaiting, created_at)
          VALUES (?, ?, ?, 'pending', ?, ?) RETURNING id`,
         queued.event.message?.id ?? null,
         source,
-        JSON.stringify(result.cards.map((card) => ({ ...card, source }))),
+        JSON.stringify(cards),
         question ? "ask" : null,
         Date.now(),
       )
       .one();
 
-    // 要約が空だと LINE が受け付けない。カードから1行ずつ作って補う
-    const summary =
-      result.summary.join("\n").trim() ||
-      result.cards.map((card) => `${card.child}：${card.title}${card.date ? `（${card.date}）` : ""}`).join("\n");
+    // 返事は、今回ふえた・変わった予定だけを短く（11/4：答えるたびに全員ぶんの予定が4行ずつ繰り返された）。
+    // モデルの要約は使わない（「承知しました」のような、できない約束を書いたため）
+    const changed = related ? cards.filter((c) => !before.some((b) => sameCard(b, c))) : cards;
+    const summary = changed.length > 0 ? summarizeCards(changed, this.profile()) : "このまま入れます。";
     await this.send(queued, [
       question
         ? withButtons(`${summary}\n\n${question}`, [
@@ -1063,8 +1233,8 @@ export class Family extends DurableObject<Env> {
       thanksPrompt(familyEvent),
     ];
     await this.send(queued, messages.slice(0, 5));
-    // 出る30分前に念押し
-    this.addJob(jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS, "reminder", String(slotId));
+    // 出る30分前に念押し（1回だけ）
+    this.addReminder(slot);
   }
 
   private async thank(queued: QueuedEvent, eventId: number, userId?: string) {
@@ -1113,22 +1283,22 @@ export class Family extends DurableObject<Env> {
       if (queued) await this.send(queued, [{ type: "text", text: "明日の送り迎えは、全部決まっています。" }]);
       return;
     }
-    // 自動のお知らせは、今月の送信数が少なければ送らない（家族が頼んだときのぶんを残す）。印も付けない
-    if (!queued && !(await this.pushAllowed(true))) return;
-    // 先に印と予約を済ませてから送る。送信が1回失敗しても、朝の聞き直しと念押しは残る
+    // 印と予約を先に済ませる。送れなくても、朝の聞き直しと念押しは残る
     for (const slot of open) this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = COALESCE(requested_by, '自動') WHERE id = ?", slot.id);
     if (!retry && open.length > 0) this.addJob(jstToMs(date, ASK_MORNING), "ask_morning", date);
-    for (const slot of open) this.addJob(jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS, "reminder", String(slot.id));
-    const messages: OutMessage[] = [...open.map((slot) => askMessage(slot, { retry })), ...(items ? [items] : [])];
+    // 朝 7:00 の聞き直しと同じころに「まだ決まっていません」を重ねない（7:30 の送りは 7:00 の聞き直しが念押しを兼ねる）
+    const morning = jstToMs(date, ASK_MORNING);
+    for (const slot of open) {
+      if (jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS > morning + 45 * 60 * 1000) this.addReminder(slot);
+    }
+    // 1回で送るのは5通まで（送迎4枠＋持ち物でちょうど）
+    const messages: OutMessage[] = [...open.map((slot) => askMessage(slot, { retry })), ...(items ? [items] : [])].slice(0, 5);
     if (queued) {
-      // 返信は1回だけ（5通まで）。6件以上は最初の5件
-      await this.send(queued, messages.slice(0, 5));
+      await this.send(queued, messages);
       return;
     }
-    // 1回の push は5通まで。6件以上なら分けて送る
-    for (let i = 0; i < messages.length; i += 5) {
-      await this.pushToGroup(messages.slice(i, i + 5), true);
-    }
+    // 自動のお知らせは「今日のぶん」の中で1回だけ。送れなければ、その日の夕方まで次の返信に相乗り
+    if (!(await this.pushToGroup(messages, true))) this.defer(messages, `ask:${date}`, jstToMs(date, "18:00"));
   }
 
   // ── 締め：ありがとう → 家族の冒険 ────────────────────────
@@ -1188,6 +1358,8 @@ export class Family extends DurableObject<Env> {
         drafts: sum("連絡文の下書き"),
         notices: sum("読んだお便り"),
         routed: sum("聞き分け"),
+        reports: sum("決まった報告"),
+        pushes: sum("プッシュ"),
       };
     };
     const now = week(monday);
@@ -1196,11 +1368,12 @@ export class Family extends DurableObject<Env> {
     return [
       `📊 今週（${md(monday)}〜${md(addDays(monday, 6))}）の数字`,
       `手で打った文：${now.typed}通（ボタン ${now.buttons}回は別）`,
-      `送迎：決まった ${now.decided}件・まだ ${now.open}件（名前ボタンで引き受け ${now.takes}回）`,
+      `送迎：決まった ${now.decided}件・まだ ${now.open}件（引き受け ${now.takes}回・「○○になりました」の報告 ${now.reports}回）`,
       `ありがとう：${now.thanks}回`,
       `連絡文の下書き：${now.drafts}回`,
       `読んだお便り：${now.notices}件`,
       `だんどりさんへの呼びかけ（聞き分け）：${now.routed}回`,
+      `だんどりさんから送った知らせ（LINE の送信数）：${now.pushes}通　返信は数えません`,
       `先週：手で打った文 ${prev.typed}通・決まった送迎 ${prev.decided}件・ありがとう ${prev.thanks}回`,
       "数えているのは数だけです。文の中身は残していません。",
     ].join("\n");
@@ -1210,8 +1383,12 @@ export class Family extends DurableObject<Env> {
   private async sendWeeklyCard(queued?: QueuedEvent) {
     const reward = this.sql.exec("SELECT value FROM settings WHERE key = 'reward'").toArray()[0]?.value as string | undefined;
     const card = weeklyCard(this.stats(), reward);
-    if (queued) await this.send(queued, [card]);
-    else await this.pushToGroup([card], true);
+    if (queued) {
+      await this.send(queued, [card]);
+      return;
+    }
+    // 日曜 20:00 のカードはプッシュしない。次にグループで話したときの返信に乗せる（3日まで待つ）
+    this.defer([card], "weekly", Date.now() + 3 * 86_400_000);
   }
 
   // ── 定時の仕事（Cron は使わず、DO のアラームで） ───────────
@@ -1233,14 +1410,17 @@ export class Family extends DurableObject<Env> {
 
   private async runDueJobs() {
     const due = this.sql
-      .exec<{ id: number; type: string; payload: string }>("SELECT id, type, payload FROM jobs WHERE due_at <= ? ORDER BY due_at", Date.now())
+      .exec<{ id: number; due_at: number; type: string; payload: string }>(
+        "SELECT id, due_at, type, payload FROM jobs WHERE due_at <= ? ORDER BY due_at",
+        Date.now(),
+      )
       .toArray();
     for (const job of due) {
       this.sql.exec("DELETE FROM jobs WHERE id = ?", job.id);
       // payload の末尾 "|n" は失敗した回数。3回までは5分後にやり直す
       const [payload, tries = "0"] = job.payload.split("|");
       try {
-        await this.runJob(job.type as JobType, payload);
+        await this.runJob(job.type as JobType, payload, Number(tries) === 0 ? job.due_at : null);
       } catch (error) {
         console.error("job failed", job.type, error instanceof Error ? error.message : "");
         if (Number(tries) < 3) this.addJob(Date.now() + 5 * 60 * 1000, job.type as JobType, `${payload}|${Number(tries) + 1}`);
@@ -1248,13 +1428,32 @@ export class Family extends DurableObject<Env> {
     }
   }
 
-  private async runJob(type: JobType, payload: string) {
+  /** 念押しの予約。同じ枠の古い予約は消す（枠の時刻が変わると古い時刻の予約が残り、念押しが2回出た：11/4） */
+  private addReminder(slot: Pick<Slot, "id" | "date" | "time">) {
+    this.sql.exec("DELETE FROM jobs WHERE type = 'reminder' AND (payload = ? OR payload LIKE ?)", String(slot.id), `${slot.id}|%`);
+    this.addJob(jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS, "reminder", String(slot.id));
+  }
+
+  /** dueAt は予約した時刻（やり直しのときは null） */
+  private async runJob(type: JobType, payload: string, dueAt: number | null = null) {
     if (type === "ask_evening") await this.askForDate(payload, false);
     else if (type === "ask_morning") await this.askForDate(payload, true);
     else if (type === "reminder") {
       const slot = this.slotById(Number(payload));
-      if (!slot) return;
-      await this.pushToGroup([slot.status === "決定" ? reminderMessage(slot) : undecidedMessage(slot)], true);
+      if (!slot || slot.status === "取消" || slot.status === "不要") return;
+      // 念押しは1枠1回（佐藤 11/4「事前通知は1回で良い」）。今の時刻とずれた古い予約は捨てる
+      const key = `reminded.${slot.id}`;
+      if (this.sql.exec("SELECT 1 FROM settings WHERE key = ?", key).toArray().length > 0) return;
+      if (dueAt !== null && Math.abs(dueAt - (jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS)) > 5 * 60 * 1000) return;
+      this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", key, String(Date.now()));
+      if (slot.status === "決定" && slot.who) {
+        // 念押しは担当の人だけに（グループ全員に送ると人数ぶん数える）。届かなくてもグループには送らない
+        for (const id of this.userIdsOf(slot.who)) await this.pushTo(id, [reminderMessage(slot)], true);
+        return;
+      }
+      // まだ決まっていない：グループに。今日のぶんが無ければ、その時刻まで次の返信に相乗り
+      const msg = [undecidedMessage(slot)];
+      if (!(await this.pushToGroup(msg, true))) this.defer(msg, `undecided:${slot.id}`, jstToMs(slot.date, slot.time));
     } else if (type === "weekly_card") await this.sendWeeklyCard();
   }
 
@@ -1264,7 +1463,9 @@ export class Family extends DurableObject<Env> {
   private async continueFlow(queued: QueuedEvent, userId: string, text: string): Promise<boolean> {
     const today = jstDate();
     const profile = this.profile();
-    const row = this.sql.exec<{ step: string; data: string }>("SELECT step, data FROM flows WHERE user_id = ?", userId).toArray()[0];
+    const row = this.sql
+      .exec<{ step: string; data: string; updated_at: number }>("SELECT step, data, updated_at FROM flows WHERE user_id = ?", userId)
+      .toArray()[0];
     const data = row ? (JSON.parse(row.data) as Record<string, string>) : {};
     const set = (step: string, patch: Record<string, string>) =>
       this.sql.exec(
@@ -1299,6 +1500,7 @@ export class Family extends DurableObject<Env> {
       await this.send(queued, [
         withButtons("どの子が休みますか？", [
           ...profile.children.map((c) => ({ label: c.name, text: c.name })),
+          { label: "全員", text: "全員" },
           { label: "やめる", text: "やめる" },
         ]),
       ]);
@@ -1334,6 +1536,24 @@ export class Family extends DurableObject<Env> {
       await this.askGroup(queued, [askMessage({ ...slot, time, status: "お願い中" }, { exclude: role ?? undefined })]);
       return true;
     }
+    // 休みの連絡で聞き返した答え（「全員です」「16日です」）：最初の文に足して読み直す。30分たったら別の話
+    if (row.step === "absence.ask") {
+      done();
+      if (Date.now() - row.updated_at > 30 * 60 * 1000 || isButtonText(text) || parseAccept(text)) return false;
+      await this.absence(queued, `${data.text}\n${text}`, today);
+      return true;
+    }
+    if (row.step === "absence.child" && text === "全員") {
+      set("absence.reason", { child: "全員" });
+      await this.send(queued, [
+        withButtons("理由は？", [
+          { label: "体調不良", text: "体調不良" },
+          { label: "家庭の都合", text: "家庭の都合" },
+          { label: "やめる", text: "やめる" },
+        ]),
+      ]);
+      return true;
+    }
     if (row.step === "absence.child" && profile.children.some((c) => c.name === text)) {
       set("absence.reason", { child: text });
       await this.send(queued, [
@@ -1345,6 +1565,11 @@ export class Family extends DurableObject<Env> {
           { label: "やめる", text: "やめる" },
         ]),
       ]);
+      return true;
+    }
+    if (row.step === "absence.reason" && data.child === "全員") {
+      done();
+      await this.absence(queued, `今日 全員 ${text} 休み`, today);
       return true;
     }
     if (row.step === "absence.reason") {
@@ -1476,7 +1701,8 @@ export class Family extends DurableObject<Env> {
         );
         continue;
       }
-      if (same.status === "決定") continue;
+      // 決まった枠・家族が行かない枠（ファミサポ・お休み）は、お便りや毎日の枠で上書きしない
+      if (same.status === "決定" || same.status === "不要") continue;
       // お便りに担当が書いてあればそれで決まる。子どもの名前は多いほうを残す
       const children = slot.children.length > same.children.length ? slot.children : same.children;
       this.sql.exec(
@@ -1518,48 +1744,158 @@ export class Family extends DurableObject<Env> {
     return row ? toSlot(row) : null;
   }
 
-  /**
-   * グループへのプッシュ（LINE の送信数を「人数ぶん」使う）。auto は定時のお知らせ。
-   * 送れなかった（数が足りない）ら false
-   */
+  // ── LINE への送り方（送信数を使わないように） ─────────────────
+  // 返信は無料で何通でも。数えるのはプッシュだけ（グループ宛ては人数ぶん）。だから：
+  //  1) 1つの発言への返事は、全部まとめて1回の返信にする（send は箱に入れるだけ、flush で送る）
+  //  2) 急がない知らせ（冒険カード・送れなかった聞き取り）は、次にグループで話したときの返信に相乗りさせる
+  //  3) 定時のお知らせは、今月の残りを残りの日数で割った「今日のぶん」の中だけで送る
+  //  4) 念押しは担当の人だけに送る（人数ぶん → 1）
+
+  /** 返事を箱に入れる。送るのは flush（1つの発言に1回の返信） */
+  private send(queued: QueuedEvent, messages: OutMessage[]): Promise<void> {
+    (queued.outbox ??= []).push(...messages);
+    return Promise.resolve();
+  }
+
+  /** 1つの発言への返事を、1回の返信で送る。グループなら、待っている知らせも空きに相乗りさせる */
+  private async flush(queued: QueuedEvent) {
+    const own = fitFive(queued.outbox ?? []);
+    queued.outbox = [];
+    const isGroup = queued.event.source.type !== "user";
+    const later = isGroup ? this.takeLater(5 - own.length) : [];
+    const messages = [...own, ...later.flatMap((l) => l.messages)];
+    const { replyToken } = queued.event;
+    if (messages.length === 0 || !replyToken) return;
+    if (await reply(this.env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, messages)) {
+      for (const l of later) this.sql.exec("DELETE FROM later WHERE kind = ?", l.kind);
+      if (later.length > 0) console.log(JSON.stringify({ step: "later_sent", n: later.length }));
+      return;
+    }
+    // 返信できなかった（期限切れなど）。相乗りぶんは待たせたまま、自分の返事だけ
+    if (own.length === 0) return;
+    console.log(JSON.stringify({ step: "reply_fallback", to: isGroup ? "group" : "user" }));
+    if (!isGroup) {
+      await this.pushTo(queued.event.source.userId!, own, false);
+      return;
+    }
+    // グループ宛ては定時のお知らせと同じ「今日のぶん」で。足りなければ次の返信に相乗り
+    if (!(await this.pushTo(queued.familyId, own, true))) this.defer(own, `late:${queued.event.webhookEventId}`, Date.now() + 2 * 86_400_000);
+  }
+
+  /** あとで次の返信に相乗りさせる。kind が同じものは新しいほうに置き換える */
+  private defer(messages: OutMessage[], kind: string, expiresAt: number) {
+    this.sql.exec(
+      "INSERT OR REPLACE INTO later (kind, payload, created_at, expires_at) VALUES (?, ?, ?, ?)",
+      kind,
+      JSON.stringify(messages.slice(0, 5)),
+      Date.now(),
+      expiresAt,
+    );
+    console.log(JSON.stringify({ step: "deferred", kind: kind.split(":")[0], n: messages.length }));
+  }
+
+  /** 空き（room 通）に入るぶんだけ、古い順に取り出す。期限切れは捨てる */
+  private takeLater(room: number): { kind: string; messages: OutMessage[] }[] {
+    this.sql.exec("DELETE FROM later WHERE expires_at < ?", Date.now());
+    if (room <= 0) return [];
+    const rows = this.sql.exec<{ kind: string; payload: string }>("SELECT kind, payload FROM later ORDER BY created_at").toArray();
+    const out: { kind: string; messages: OutMessage[] }[] = [];
+    // 待っている間に決まった枠（名前ボタン・「ファミサポに頼みました」）の「行ける人？」「まだ決まっていません」は出さない
+    const open = (id: number) => {
+      const slot = this.slotById(id);
+      return !!slot && (slot.status === "未定" || slot.status === "お願い中");
+    };
+    for (const r of rows) {
+      const undecided = /^undecided:(\d+)$/.exec(r.kind);
+      let messages = (JSON.parse(r.payload) as OutMessage[]).filter((m) => {
+        const asked = /引受 #(\d+)/.exec(JSON.stringify(m));
+        return !asked || open(Number(asked[1]));
+      });
+      if (undecided && !open(Number(undecided[1]))) messages = [];
+      if (messages.length === 0) {
+        this.sql.exec("DELETE FROM later WHERE kind = ?", r.kind);
+        continue;
+      }
+      if (messages.length > room) continue;
+      out.push({ kind: r.kind, messages });
+      room -= messages.length;
+    }
+    return out;
+  }
+
+  /** グループへのプッシュ。auto は定時のお知らせ（今日のぶんの中だけ）。送れたら true */
   private async pushToGroup(messages: OutMessage[], auto = false): Promise<boolean> {
     const familyId = this.familyId();
     if (!familyId) return false;
-    if (!(await this.pushAllowed(auto))) return false;
-    await push(this.env.LINE_CHANNEL_ACCESS_TOKEN, familyId, messages.slice(0, 5));
+    return this.pushTo(familyId, messages, auto);
+  }
+
+  /** プッシュ（グループなら人数ぶん、1人なら1通）。送信数が足りない・届かないときは false（例外にしない） */
+  private async pushTo(to: string, messages: OutMessage[], auto: boolean): Promise<boolean> {
+    const token = this.env.LINE_CHANNEL_ACCESS_TOKEN;
+    const isUser = to.startsWith("U");
+    const need = isUser ? 1 : ((await chatMemberCount(token, to).catch(() => null)) ?? ADULTS.length);
+    if (!(await this.budget(need, auto))) return false;
+    try {
+      await push(token, to, messages.slice(0, 5));
+    } catch (error) {
+      console.error("push failed", isUser ? "user" : "group", error instanceof Error ? error.message.slice(0, 120) : "");
+      return false;
+    }
+    this.count("プッシュ", need);
     return true;
   }
 
   /**
-   * 今月の残りで送ってよいか。定時のお知らせ（auto）は PUSH_RESERVE 通を残して止める。
-   * 家族が頼んだとき（1対1→グループ）は、人数ぶん残っていれば送る。残りが取れなければ止めない
+   * 送ってよいか。家族が頼んだとき（auto=false）は、残りが足りれば送る。
+   * 定時のお知らせ（auto）は、PUSH_RESERVE を残し、さらに「残り÷今月の残りの日数」を今日のぶんとして、その中だけ。
+   * 上限なしのプランなら止めない。残りが読めないときは、家族が頼んだぶんだけ送り、定時のお知らせは送らない
+   * （11/4：読めないまま「送る」に倒れて、定時のお知らせがグループに4回出た）
    */
-  private async pushAllowed(auto: boolean): Promise<boolean> {
-    const familyId = this.familyId();
-    if (!familyId) return false;
-    const token = this.env.LINE_CHANNEL_ACCESS_TOKEN;
-    const [remaining, members] = await Promise.all([
-      pushRemaining(token).catch(() => null),
-      chatMemberCount(token, familyId).catch(() => null),
-    ]);
-    if (remaining === null) return true;
-    const need = members ?? ADULTS.length;
-    const ok = remaining - need >= (auto ? PUSH_RESERVE : 0);
-    if (!ok) console.log(JSON.stringify({ step: "push_skipped", auto, remaining, need }));
+  private async budget(need: number, auto: boolean): Promise<boolean> {
+    const remaining = await pushRemaining(this.env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => null);
+    if (remaining === null) {
+      if (auto) console.log(JSON.stringify({ step: "push_skipped", auto, remaining: null, need }));
+      return !auto;
+    }
+    if (remaining === Infinity) return true;
+    if (!auto) {
+      const ok = remaining >= need;
+      if (!ok) console.log(JSON.stringify({ step: "push_skipped", auto, remaining, need }));
+      return ok;
+    }
+    const today = jstDate();
+    const usedToday = this.countOf("プッシュ", today);
+    const daily = Math.floor((remaining + usedToday - PUSH_RESERVE) / daysLeftInMonth(today));
+    const ok = remaining - need >= PUSH_RESERVE && usedToday + need <= daily;
+    if (!ok) console.log(JSON.stringify({ step: "push_skipped", auto, remaining, need, usedToday, daily }));
     return ok;
   }
 
-  private async send(queued: QueuedEvent, messages: OutMessage[]) {
-    const token = this.env.LINE_CHANNEL_ACCESS_TOKEN;
-    const { replyToken } = queued.event;
-    const inTime = Date.now() - queued.receivedAt < REPLY_WINDOW_MS;
-    if (replyToken && inTime && (await reply(token, replyToken, messages))) return;
-    const isUser = queued.event.source.type === "user";
-    // 返信できなかったときの代わりのプッシュも送信数を使う。グループ宛ては残りを見てから
-    console.log(JSON.stringify({ step: "reply_fallback_push", to: isUser ? "user" : "group" }));
-    if (!isUser && !(await this.pushAllowed(false))) return;
-    await push(token, isUser ? queued.event.source.userId! : queued.familyId, messages);
+  private countOf(key: string, day: string): number {
+    return Number(this.sql.exec<{ n: number }>("SELECT n FROM counts WHERE day = ? AND key = ?", day, key).toArray()[0]?.n ?? 0);
   }
+}
+
+/** 1回の返信は5通まで。超えるときは、続いた文だけの吹き出しを1つにまとめ、それでも多ければ先頭の5通 */
+function fitFive(messages: OutMessage[]): OutMessage[] {
+  if (messages.length <= 5) return messages;
+  const merged: OutMessage[] = [];
+  for (const m of messages) {
+    const last = merged[merged.length - 1];
+    if (m.type === "text" && !m.quickReply && last?.type === "text" && !last.quickReply) {
+      merged[merged.length - 1] = { ...last, text: `${last.text}\n\n${m.text}` };
+    } else merged.push(m);
+  }
+  if (merged.length > 5) console.log(JSON.stringify({ step: "reply_trimmed", dropped: merged.length - 5 }));
+  return merged.slice(0, 5);
+}
+
+/** 今月の残りの日数（今日を含む） */
+function daysLeftInMonth(today: string): number {
+  const [y, m, d] = today.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return last - d + 1;
 }
 
 function isWeekend(date: string) {
@@ -1585,14 +1921,6 @@ function isButtonText(text: string): boolean {
   );
 }
 
-/** 家族の呼び方の言い換え。「おばあちゃんに」「お父さんへ」も ばあば・パパ として読む */
-const ROLE_WORDS: Record<Adult, string> = {
-  パパ: "パパ|ぱぱ|お父さん|おとうさん|父|夫|旦那",
-  ママ: "ママ|まま|お母さん|おかあさん|母|妻|嫁",
-  じいじ: "じいじ|じぃじ|じーじ|おじいちゃん|祖父",
-  ばあば: "ばあば|ばぁば|ばーば|おばあちゃん|祖母",
-};
-
 /** 「○○に頼んで」の ○○ が家族のだれか。呼び名・言い換えで見る */
 function roleInText(text: string): Adult | null {
   // 「祖父に」を「父に」と読まないよう、じいじ・ばあばを先に見る
@@ -1607,7 +1935,8 @@ function withoutSelfMention(event: LineEvent, fallback: string): string {
   let text = raw;
   const spans = (event.message?.mention?.mentionees ?? []).filter((m) => m.isSelf).sort((a, b) => b.index - a.index);
   for (const s of spans) text = text.slice(0, s.index) + text.slice(s.index + s.length);
-  return text.replace(/@だんどりさん/g, "").replace(/[\s　]+/g, " ").trim();
+  // 改行は残す（「28日土曜お迎え パパ\nさくら遅番」の1行目だけを読むため。11/4 に改行がつぶれて読めなかった）
+  return text.replace(/@だんどりさん/g, "").replace(/[ \t　]+/g, " ").replace(/ *\n */g, "\n").trim();
 }
 
 /** だんどりさん自身が @名指しされたか */
@@ -1642,6 +1971,49 @@ export function wantsToKeepPhoto(text: string): boolean {
   return /^(残して|のこして|とっておいて|とっといて|保存して|保存しておいて|保存しといて)$/.test(t);
 }
 
+/** 同じ予定か（聞き返しの答えで「変わったところ」だけを見せるため） */
+function sameCard(a: Card, b: Card): boolean {
+  const key = (c: Card) =>
+    [c.child, c.kind, c.title, c.date, c.time, c.place, c.deadline, c.items.join("・"), c.money, c.who_acts].join("|");
+  return key(a) === key(b);
+}
+
+/**
+ * 予定カードを家族向けの短い行に。同じ予定のきょうだいは1行にまとめる（「ゆい・そうた・めい：11/16（月） 内科健診」）。
+ * 日付順、6行まで
+ */
+function summarizeCards(cards: Card[], profile: FamilyProfile): string {
+  const groups = new Map<string, { children: string[]; card: Card }>();
+  for (const c of cards) {
+    const key = [c.kind, c.title, c.date, c.time, c.who_acts, c.items.join("・"), c.money, c.deadline].join("|");
+    const g = groups.get(key);
+    if (g) {
+      if (!g.children.includes(c.child)) g.children.push(c.child);
+    } else groups.set(key, { children: [c.child], card: c });
+  }
+  const all = profile.children.map((c) => c.name);
+  // 「生活発表会」と「生活発表会の送迎」は1行に（送迎は19:00 に聞くので、ここでは行事だけ見せる）
+  const shown = [...groups.values()].filter(
+    ({ card }) => !(card.kind === "送迎" && card.who_acts === "未定" && cards.some((o) => o !== card && o.kind !== "送迎" && o.date === card.date && card.title.startsWith(o.title))),
+  );
+  const rows = shown.sort((a, b) => (a.card.date ?? "9999").localeCompare(b.card.date ?? "9999"));
+  const lines = rows.map(({ children, card }) => {
+    const known = children.filter((n) => n && n !== "未定" && n !== "不明");
+    const names =
+      known.includes("全員") || (all.length > 1 && all.every((n) => known.includes(n))) ? "全員" : known.join("・");
+    const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}（${"日月火水木金土"[jstWeekday(d)]}）`;
+    const when = card.date ? `${md(card.date)}${card.time ? ` ${card.time}` : ""}` : "日にち未定";
+    const extra = [
+      card.who_acts !== "未定" ? card.who_acts : "",
+      card.items.length > 0 ? card.items.slice(0, 3).join("・") : "",
+      card.money ? `${card.money.toLocaleString("ja-JP")}円` : "",
+      card.deadline ? `締切 ${md(card.deadline)}` : "",
+    ].filter(Boolean);
+    return `${names ? `${names}：` : ""}${when} ${card.title}${extra.length > 0 ? `（${extra.join("、")}）` : ""}`;
+  });
+  return lines.length > 6 ? [...lines.slice(0, 6), `ほか ${lines.length - 6}件`].join("\n") : lines.join("\n");
+}
+
 function toSlot(row: SlotRow): Slot {
   return {
     id: row.id,
@@ -1653,6 +2025,7 @@ function toSlot(row: SlotRow): Slot {
     who: (row.who as Adult | null) ?? null,
     status: row.status as Slot["status"],
     requestedBy: (row.requested_by as Slot["requestedBy"]) ?? undefined,
+    note: row.note ?? undefined,
   };
 }
 

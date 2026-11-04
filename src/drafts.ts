@@ -153,6 +153,45 @@ function toDraft(raw: RawDraft, input: { profile: FamilyProfile; today: string }
   return draft;
 }
 
+/**
+ * 「16日は全員お休み」「保育所の3人とも休み」：きょうだいまとめての休み。Claude を呼ばずに、通い先ごとに1枚ずつ作る。
+ * 1人の子の名前だけなら null（ふつうの下書きへ）。学校が振替休日・休校なら学校への連絡は作らない
+ */
+export function groupAbsence(text: string, profile: FamilyProfile, today: string, date: string): AbsenceDraft[] | null {
+  const named = profile.children.filter((c) => text.includes(c.name));
+  const all = /全員|みんな|\d人とも|３人とも|きょうだい|兄弟|姉妹/.test(text);
+  if (!all && named.length < 2) return null;
+  const nurseryWord = /保育|こども園|子供園|子ども園|幼稚園|園/.test(text);
+  const schoolWord = /学校|小学/.test(text);
+  const schoolClosed = /振替|休校|学校(は|も)休み/.test(text);
+  const pick = (attends: string) =>
+    (named.length >= 2 ? named : profile.children).filter((c) => c.attends === attends).map((c) => c.name);
+  const sick = /熱|発熱|咳|せき|吐|嘔吐|下痢|体調|風邪|かぜ|病/.test(text);
+  const day = formatDate(date);
+  const drafts: AbsenceDraft[] = [];
+  const nursery = !schoolWord || nurseryWord ? pick("保育所") : [];
+  if (nursery.length > 0) {
+    const reason = sick ? "体調不良" : "家庭の都合";
+    drafts.push({
+      child: nursery.join("・"),
+      attends: "保育所",
+      date,
+      nursery: { two_days: false, reason, note: `${day}は${reason}のためお休みします。よろしくお願いします。` },
+    });
+  }
+  const school = (!nurseryWord || schoolWord) && !schoolClosed ? pick("小学校") : [];
+  if (school.length > 0) {
+    const reason = sick ? "体調不良" : "家庭の都合";
+    drafts.push({
+      child: school.join("・"),
+      attends: "小学校",
+      date,
+      school: { date, reason, note: `${day}は${reason}のため欠席します。よろしくお願いします。` },
+    });
+  }
+  return drafts.length > 0 ? drafts : null;
+}
+
 /** 「休み」「欠席」「熱」などを含む、欠席の一言かどうか。休園・休校・おやすみの挨拶は除く */
 export function looksLikeAbsence(text: string): boolean {
   const t = text.trim();

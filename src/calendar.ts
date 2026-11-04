@@ -73,9 +73,14 @@ function liveSlots(slots: Slot[]) {
   return slots.filter((s) => s.status !== "取消");
 }
 
-/** 未定＝担当がいない */
+/** 未定＝担当がいない（ファミサポ・お休みで家族が行かない枠は未定にしない） */
 function undecided(slot: Slot) {
-  return slot.who === null;
+  return slot.who === null && slot.status !== "不要";
+}
+
+/** 担当の名前。家族が行かない枠は「ファミサポ」「お休み」、未定は「だれ？」 */
+function slotWho(slot: Slot) {
+  return slot.who ?? (slot.status === "不要" ? slot.note || "なし" : "だれ？");
 }
 
 /** 「9:00」「17:30〜」を "HH:MM" にそろえる。読めなければ null（終日あつかい）。読み取りは形を縛っていないので、ここで守る */
@@ -170,7 +175,7 @@ function slotChips(slots: Slot[]) {
     .map((s) => {
       const same = sorted.filter((o) => o.kind === s.kind).length;
       const label = same > 1 ? `${s.time} ${s.place}` : s.kind === "送り" ? "朝の送り" : "お迎え";
-      const who = s.who ?? "だれ？";
+      const who = slotWho(s);
       const nd = undecided(s);
       return `<span class="chip${nd ? " nd" : ""}"${nd ? ' aria-label="送迎の担当がまだ決まっていません"' : ""}>${esc(label)}：${esc(who)}</span>`;
     })
@@ -279,7 +284,7 @@ function cellInner(d: string, input: CalendarInput, slots: Slot[], idx: Map<stri
     .sort(byTime);
   const marks: string[] = [];
   if (daySlots.some(undecided)) marks.push(`<i class="pk nd" title="送迎の担当が未定">？</i>`);
-  for (const s of daySlots.filter((s) => !undecided(s)).slice(0, 2)) marks.push(`<i class="pk ok">${esc(adultInitial(s.who ?? ""))}</i>`);
+  for (const s of daySlots.filter((s) => !undecided(s)).slice(0, 2)) marks.push(`<i class="pk ok">${esc(adultInitial(slotWho(s)))}</i>`);
   const chips = cards
     .slice(0, 3)
     .map((c) => {
@@ -772,7 +777,7 @@ export function renderIcs(input: { cards: Card[]; slots: Slot[]; familyName?: st
       date: slot.date,
       time: slot.time,
       minutes: 30,
-      summary: `${slot.time} ${slot.place}${kindWord(slot.kind)}：${slot.who ?? "だれ？"}`,
+      summary: `${slot.time} ${slot.place}${kindWord(slot.kind)}：${slotWho(slot)}`,
       description: slot.children.length > 0 ? `だれ：${slot.children.join("・")}` : undefined,
       location: slot.place,
     });

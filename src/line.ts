@@ -1,7 +1,13 @@
 // LINE Messaging API の薄い窓口。メッセージの中身はログに出さない
 
-const API = "https://api.line.me/v2/bot/message";
-const DATA_API = "https://api-data.line.me/v2/bot/message";
+// 手元の試験だけ、LINE の窓口を偽物に向ける（LINE_API_BASE）。本番では設定しない
+let HOST = "https://api.line.me";
+let DATA_HOST = "https://api-data.line.me";
+export function useLineBase(base?: string) {
+  if (base) HOST = DATA_HOST = base.replace(/\/$/, "");
+}
+const api = () => `${HOST}/v2/bot/message`;
+const dataApi = () => `${DATA_HOST}/v2/bot/message`;
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
 
 export type ImageType = (typeof IMAGE_TYPES)[number];
@@ -115,7 +121,7 @@ export async function verifySignature(body: string, signature: string | null, se
 }
 
 async function post(path: string, token: string, payload: unknown) {
-  return fetch(`${API}/${path}`, {
+  return fetch(`${api()}/${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(payload),
@@ -133,7 +139,7 @@ export async function reply(token: string, replyToken: string, messages: OutMess
 /** グループ（またはトークルーム）の中での表示名。「さくらに頼んで」の「さくら」がだれかを知るためだけに使う */
 export async function memberName(token: string, chatId: string, userId: string): Promise<string | null> {
   const kind = chatId.startsWith("R") ? "room" : "group";
-  const res = await fetch(`https://api.line.me/v2/bot/${kind}/${chatId}/member/${userId}`, {
+  const res = await fetch(`${HOST}/v2/bot/${kind}/${chatId}/member/${userId}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return null;
@@ -143,17 +149,18 @@ export async function memberName(token: string, chatId: string, userId: string):
 
 /**
  * 今月のプッシュの残り。無料プランは月200通で、グループへのプッシュは「人数ぶん」数える。
- * 上限なし（有料の従量）なら null。取れなければ null（止めない）
+ * 上限なし（有料の従量）なら Infinity。取れなければ null（呼ぶ側が決める）
  */
 export async function pushRemaining(token: string): Promise<number | null> {
   const headers = { Authorization: `Bearer ${token}` };
   const [q, c] = await Promise.all([
-    fetch("https://api.line.me/v2/bot/message/quota", { headers }),
-    fetch("https://api.line.me/v2/bot/message/quota/consumption", { headers }),
+    fetch(`${HOST}/v2/bot/message/quota`, { headers }),
+    fetch(`${HOST}/v2/bot/message/quota/consumption`, { headers }),
   ]);
   if (!q.ok || !c.ok) return null;
   const quota = (await q.json()) as { type?: string; value?: number };
   const used = (await c.json()) as { totalUsage?: number };
+  if (quota.type === "none") return Infinity;
   if (quota.type !== "limited" || typeof quota.value !== "number") return null;
   return quota.value - (used.totalUsage ?? 0);
 }
@@ -161,7 +168,7 @@ export async function pushRemaining(token: string): Promise<number | null> {
 /** グループ（トークルーム）の人数（だんどりさんは数えない）。取れなければ null */
 export async function chatMemberCount(token: string, chatId: string): Promise<number | null> {
   const kind = chatId.startsWith("R") ? "room" : "group";
-  const res = await fetch(`https://api.line.me/v2/bot/${kind}/${chatId}/members/count`, {
+  const res = await fetch(`${HOST}/v2/bot/${kind}/${chatId}/members/count`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return null;
@@ -177,7 +184,7 @@ export async function push(token: string, to: string, messages: OutMessage[]) {
 
 // ── リッチメニュー（1対1のトークの下に出る4つの入口。家族ごとに1つ作り、名簿の人に結びつける） ──
 
-const RICHMENU_API = "https://api.line.me/v2/bot/richmenu";
+const richmenuApi = () => `${HOST}/v2/bot/richmenu`;
 
 export interface RichMenuArea {
   bounds: { x: number; y: number; width: number; height: number };
@@ -186,7 +193,7 @@ export interface RichMenuArea {
 
 /** 作って ID を返す。画像はこのあと uploadRichMenuImage で入れる */
 export async function createRichMenu(token: string, name: string, areas: RichMenuArea[]) {
-  const res = await fetch(RICHMENU_API, {
+  const res = await fetch(richmenuApi(), {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ size: { width: 2500, height: 843 }, selected: true, name, chatBarText: "メニュー", areas }),
@@ -196,7 +203,7 @@ export async function createRichMenu(token: string, name: string, areas: RichMen
 }
 
 export async function uploadRichMenuImage(token: string, richMenuId: string, png: ArrayBuffer) {
-  const res = await fetch(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, {
+  const res = await fetch(`${DATA_HOST}/v2/bot/richmenu/${richMenuId}/content`, {
     method: "POST",
     headers: { "Content-Type": "image/png", Authorization: `Bearer ${token}` },
     body: png,
@@ -207,7 +214,7 @@ export async function uploadRichMenuImage(token: string, richMenuId: string, png
 /** 名簿の人たちに結びつける（1対1のトークにだけ出る） */
 export async function linkRichMenu(token: string, richMenuId: string, userIds: string[]) {
   if (userIds.length === 0) return;
-  const res = await fetch(`${RICHMENU_API}/bulk/link`, {
+  const res = await fetch(`${richmenuApi()}/bulk/link`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ richMenuId, userIds: userIds.slice(0, 500) }),
@@ -216,12 +223,12 @@ export async function linkRichMenu(token: string, richMenuId: string, userIds: s
 }
 
 export async function deleteRichMenu(token: string, richMenuId: string) {
-  await fetch(`${RICHMENU_API}/${richMenuId}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+  await fetch(`${richmenuApi()}/${richMenuId}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
 }
 
 /** 画像を保存せずメモリにだけ取り出す。送信取消などで取れないときは null */
 export async function fetchImage(token: string, messageId: string) {
-  const res = await fetch(`${DATA_API}/${messageId}/content`, {
+  const res = await fetch(`${dataApi()}/${messageId}/content`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (res.status === 404 || res.status === 410) return null;
