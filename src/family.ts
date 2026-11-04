@@ -708,8 +708,9 @@ export class Family extends DurableObject<Env> {
       return;
     }
 
-    // 「白紙にして」「取り消して」：確かめ中の内容（まだ［OK］していない読み取り）を入れずに消す
-    if (/白紙|取り消して|取消して|なしにして|無しにして|全部消して|入れないで/.test(text)) {
+    // 「白紙にして」「取り消して」：確かめ中の内容（まだ［OK］していない読み取り）を入れずに消す。
+    // 短いひとことだけ（貼り付けたお便りの「袋に入れないでください」や「写真代は入れないで」の直しで、全部消えた：11/5 の見直し）
+    if (text.length <= 25 && /白紙|取り消して|取消して|なしにして|無しにして|全部消して|入れないで/.test(text)) {
       const pending = this.sql
         .exec<{ id: number }>("SELECT id FROM batches WHERE status = 'pending' AND created_at > ?", Date.now() - 3 * 60 * 60 * 1000)
         .toArray();
@@ -1487,6 +1488,9 @@ export class Family extends DurableObject<Env> {
 
   /** dueAt は予約した時刻（やり直しのときは null） */
   private async runJob(type: JobType, payload: string, dueAt: number | null = null) {
+    // 撮影用の「架空の家族で」のグループからは、定時のお知らせも念押しも出さない。
+    // 撮影で決めたお迎えの念押しが、本物のばあばの1対1に届いてしまう（11/5 の見直し）。返信（「段取り 明日」「段取り 念押し」）は出る
+    if (this.sql.exec("SELECT value FROM settings WHERE key = 'profile'").toArray()[0]?.value === "sample") return;
     if (type === "ask_evening") await this.askForDate(payload, false);
     else if (type === "ask_morning") await this.askForDate(payload, true);
     else if (type === "reminder") {
@@ -1816,7 +1820,8 @@ export class Family extends DurableObject<Env> {
     queued.outbox = [];
     const isGroup = queued.event.source.type !== "user";
     const later = isGroup ? this.takeLater(5 - own.length) : [];
-    const messages = [...own, ...later.flatMap((l) => l.messages)];
+    // 相乗りぶんは先に。LINE のボタン（クイックリプライ）は最後の吹き出しにしか出ないので、この返事を最後にする（11/5 の見直し）
+    const messages = [...later.flatMap((l) => l.messages), ...own];
     const { replyToken } = queued.event;
     if (messages.length === 0 || !replyToken) return;
     if (await reply(this.env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, messages)) {
@@ -1831,8 +1836,9 @@ export class Family extends DurableObject<Env> {
       await this.pushTo(queued.event.source.userId!, own, false);
       return;
     }
-    // グループ宛ては定時のお知らせと同じ「今日のぶん」で。足りなければ次の返信に相乗り
-    if (!(await this.pushTo(queued.familyId, own, true))) this.defer(own, `late:${queued.event.webhookEventId}`, Date.now() + 2 * 86_400_000);
+    // 家族が送った文への返事なので、定時のお知らせの「今日のぶん」では止めない（読み取りが長い日に、撮影中の返事が出なかった恐れ：11/5 の見直し）。
+    // 送れなければ次の返信に相乗り
+    if (!(await this.pushTo(queued.familyId, own, false))) this.defer(own, `late:${queued.event.webhookEventId}`, Date.now() + 2 * 86_400_000);
   }
 
   /** あとで次の返信に相乗りさせる。kind が同じものは新しいほうに置き換える */

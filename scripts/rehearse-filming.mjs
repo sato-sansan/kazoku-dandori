@@ -118,7 +118,7 @@ check("パパの名乗り", /パパ、よろしくね/.test(r.text), r.text);
 r = await say("ママ", "Umama", "わたしは ママ");
 check("ママの名乗り", /ママ、よろしくね/.test(r.text), r.text);
 r = await say("パパ", "Upapa", "メニュー");
-const menu = (r.messages[0]?.quickReply?.items ?? []).map((i) => i.action.label);
+const menu = (r.messages.at(-1)?.quickReply?.items ?? []).map((i) => i.action.label);
 check("メニューのボタン6つ（📷🖼🚗🤒📅❓）", menu.length === 6 && ["📷", "🖼", "🚗", "🤒", "📅", "❓"].every((e, i) => (menu[i] ?? "").startsWith(e)), menu.join(" "));
 
 // ── S2 休み ──────────────────────────────────────────────

@@ -256,7 +256,8 @@ export function absenceMessages(draft: AbsenceDraft, contacts?: FamilyProfile["c
     messages.push(bubble("小学校", lines, draft.school.note, contacts?.["小学校"]));
   }
   if (draft.lesson) {
-    messages.push(bubble("習い事", [draft.lesson], draft.lesson));
+    // 習い事の電話は覚える所が無いので［📞 電話］を付けない（押しても何も起きなかった：11/5 の見直し）
+    messages.push(bubble("習い事", [draft.lesson], draft.lesson, undefined, false));
   }
 
   const tail = [draft.reshuffle, draft.ask].filter((line): line is string => Boolean(line));
@@ -275,6 +276,7 @@ function bubble(
   lines: (string | false | undefined)[],
   copyText: string,
   contact?: { phone: string; by?: string },
+  phoneButton = true,
 ): FlexMessage {
   const body = lines.filter((line): line is string => Boolean(line && line.trim()));
   // 電話の方が楽な家のために、番号が登録してあれば「9:00までに電話」を本文に、［電話をかける］を［コピー］の横に出す
@@ -301,7 +303,7 @@ function bubble(
           color: "#2e8b57",
           action: { type: "uri", label: "📞 電話をかける", uri: `tel:${tel}` },
         }
-      : {
+      : phoneButton && {
           type: "button",
           style: "secondary",
           height: "sm",
