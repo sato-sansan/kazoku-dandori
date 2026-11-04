@@ -1354,12 +1354,16 @@ export class Family extends DurableObject<Env> {
     }
     // 1回で送るのは5通まで（送迎4枠＋持ち物でちょうど）
     const messages: OutMessage[] = [...open.map((slot) => askMessage(slot, { retry })), ...(items ? [items] : [])].slice(0, 5);
+    // 前の晩に送れず待たせていた同じ日の聞き取りは、今出すもので置き換える（同じ札が2回付いた：11/5 の見直し）
     if (queued) {
+      this.sql.exec("DELETE FROM later WHERE kind = ?", `ask:${date}`);
       await this.send(queued, messages);
       return;
     }
-    // 自動のお知らせは「今日のぶん」の中で1回だけ。送れなければ、その日の夕方まで次の返信に相乗り
-    if (!(await this.pushToGroup(messages, true))) this.defer(messages, `ask:${date}`, jstToMs(date, "18:00"));
+    // 19:00 の聞き取りが一番大事。朝 7:00 と念押しは「今日のぶん」の中だけだが、19:00 は残りの守り（PUSH_RESERVE）だけを見る
+    // （11/5 の見直し：朝と夕方に送った日は、19:00 が「今日のぶん」を超えて出なかった）。送れなければ、その日の夕方まで次の返信に相乗り
+    if (await this.pushToGroup(messages, retry ? true : "evening")) this.sql.exec("DELETE FROM later WHERE kind = ?", `ask:${date}`);
+    else this.defer(messages, `ask:${date}`, jstToMs(date, "18:00"));
   }
 
   // ── 締め：ありがとう → 家族の冒険 ────────────────────────
@@ -1869,9 +1873,10 @@ export class Family extends DurableObject<Env> {
     const rows = this.sql.exec<{ kind: string; payload: string }>("SELECT kind, payload FROM later ORDER BY created_at").toArray();
     const out: { kind: string; messages: OutMessage[] }[] = [];
     // 待っている間に決まった枠（名前ボタン・「ファミサポに頼みました」）の「行ける人？」「まだ決まっていません」は出さない
+    // 時刻を過ぎた枠も出さない（朝の 7:30 の送りの札が昼の返事に付いた：11/5 の見直し）
     const open = (id: number) => {
       const slot = this.slotById(id);
-      return !!slot && (slot.status === "未定" || slot.status === "お願い中");
+      return !!slot && (slot.status === "未定" || slot.status === "お願い中") && jstToMs(slot.date, slot.time) > Date.now();
     };
     for (const r of rows) {
       const undecided = /^undecided:(\d+)$/.exec(r.kind);
@@ -1892,14 +1897,14 @@ export class Family extends DurableObject<Env> {
   }
 
   /** グループへのプッシュ。auto は定時のお知らせ（今日のぶんの中だけ）。送れたら true */
-  private async pushToGroup(messages: OutMessage[], auto = false): Promise<boolean> {
+  private async pushToGroup(messages: OutMessage[], auto: boolean | "evening" = false): Promise<boolean> {
     const familyId = this.familyId();
     if (!familyId) return false;
     return this.pushTo(familyId, messages, auto);
   }
 
   /** プッシュ（グループなら人数ぶん、1人なら1通）。送信数が足りない・届かないときは false（例外にしない） */
-  private async pushTo(to: string, messages: OutMessage[], auto: boolean): Promise<boolean> {
+  private async pushTo(to: string, messages: OutMessage[], auto: boolean | "evening"): Promise<boolean> {
     const token = this.env.LINE_CHANNEL_ACCESS_TOKEN;
     const isUser = to.startsWith("U");
     const need = isUser ? 1 : ((await chatMemberCount(token, to).catch(() => null)) ?? ADULTS.length);
@@ -1920,7 +1925,7 @@ export class Family extends DurableObject<Env> {
    * 上限なしのプランなら止めない。残りが読めないときは、家族が頼んだぶんだけ送り、定時のお知らせは送らない
    * （11/4：読めないまま「送る」に倒れて、定時のお知らせがグループに4回出た）
    */
-  private async budget(need: number, auto: boolean): Promise<boolean> {
+  private async budget(need: number, auto: boolean | "evening"): Promise<boolean> {
     const remaining = await pushRemaining(this.env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => null);
     if (remaining === null) {
       if (auto) console.log(JSON.stringify({ step: "push_skipped", auto, remaining: null, need }));
@@ -1929,6 +1934,12 @@ export class Family extends DurableObject<Env> {
     if (remaining === Infinity) return true;
     if (!auto) {
       const ok = remaining >= need;
+      if (!ok) console.log(JSON.stringify({ step: "push_skipped", auto, remaining, need }));
+      return ok;
+    }
+    // 19:00 の聞き取り：家族が頼むぶん（PUSH_RESERVE）だけ残す。「今日のぶん」では止めない
+    if (auto === "evening") {
+      const ok = remaining - need >= PUSH_RESERVE;
       if (!ok) console.log(JSON.stringify({ step: "push_skipped", auto, remaining, need }));
       return ok;
     }
