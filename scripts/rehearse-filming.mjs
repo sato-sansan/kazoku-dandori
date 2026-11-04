@@ -147,7 +147,11 @@ console.log(`\n▶ （グループに届いた知らせ）\n${textOf(askMessages
 transcript.push({ who: "（プッシュ）", chat: "group", said: "（1対1からの頼みがグループに届く）", reply: textOf(askMessages) });
 const names = actionsOf(askMessages).filter((a) => /^お迎え引受/.test(a.text ?? "")).map((a) => a.label);
 check("グループに「お迎え、行ける人？」が1通", lines().filter(ours).length - pushesAtS3 === 1 && /行ける人/.test(textOf(askMessages)), textOf(askMessages));
-check("名前ボタンにママがいない（パパ・じいじ・ばあば）", names.join(",") === "パパ,じいじ,ばあば", names.join(","));
+check(
+  "名前ボタンにママがいない（パパ・じいじ・ばあば＋ファミサポなど）",
+  names.filter((n) => n !== "ファミサポなど").join(",") === "パパ,じいじ,ばあば" && names.includes("ファミサポなど"),
+  names.join(","),
+);
 check("頼んだママの名前が文に出ない", !/ママ(から|が頼|より)/.test(textOf(askMessages)), textOf(askMessages));
 
 // ── S4 送迎・グループ ─────────────────────────────────────

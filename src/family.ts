@@ -1255,11 +1255,20 @@ export class Family extends DurableObject<Env> {
 
   // ── 芯B：間に立って、頼む ───────────────────────────────
 
-  private async accept(queued: QueuedEvent, slotId: number, who: Adult, today: string) {
+  private async accept(queued: QueuedEvent, slotId: number, who: Adult | "ほか", today: string) {
     const slot = this.slotById(slotId);
     if (!slot) return;
     if (slot.status === "決定") {
       await this.send(queued, [alreadyDecidedMessage(slot)]);
+      return;
+    }
+    // ［ファミサポなど］：家族は行かない。もう聞かない・念押ししない（「決まった報告」のファミサポと同じ扱い）
+    if (who === "ほか") {
+      this.sql.exec("UPDATE slots SET who = NULL, status = '不要', note = 'ファミサポなど' WHERE id = ?", slotId);
+      this.sql.exec("DELETE FROM jobs WHERE type = 'reminder' AND (payload = ? OR payload LIKE ?)", String(slotId), `${slotId}|%`);
+      await this.send(queued, [
+        { type: "text", text: `✅ ${describeSlot(slot, today)}は 家族以外（ファミサポなど）。家族に「行ける人？」は聞きません。` },
+      ]);
       return;
     }
     this.sql.exec("UPDATE slots SET who = ?, status = '決定' WHERE id = ?", who, slotId);

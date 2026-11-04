@@ -104,10 +104,17 @@ export function askMessage(slot: Slot, options?: { exclude?: Adult; retry?: bool
     type: "button",
     style: "primary",
     height: "sm",
-    action: { type: "message", label: name, text: `${word}引受 #${slot.id} ${name}` },
+    action: { type: "message", label: name as string, text: `${word}引受 #${slot.id} ${name}` },
   }));
-  // 縦に長いと前のやり取りが隠れる。小さめの1枚に、ボタンは横並び（4つなら2段）
-  const rows = [buttons.slice(0, 2), buttons.slice(2)].filter((r) => r.length > 0);
+  // 家族以外（ファミサポなど）に頼んだ日も、押すだけで「もう聞かない」にできる（11/5 パパ「その他の項目も作って ファミサポとかもあるらしい」）
+  buttons.push({
+    type: "button",
+    style: "secondary",
+    height: "sm",
+    action: { type: "message", label: "ファミサポなど", text: `${word}引受 #${slot.id} ほか` },
+  });
+  // 縦に長いと前のやり取りが隠れる。小さめの1枚に、ボタンは横並び（2つずつ）
+  const rows = [buttons.slice(0, 2), buttons.slice(2, 4), buttons.slice(4)].filter((r) => r.length > 0);
   return {
     type: "flex",
     altText: `${when} ${what}、行ける人？`,
@@ -129,11 +136,11 @@ export function askMessage(slot: Slot, options?: { exclude?: Adult; retry?: bool
   };
 }
 
-/** 「お迎え引受 #12 ばあば」のような発言を解く。合わなければ null */
-export function parseAccept(text: string): { slotId: number; who: Adult } | null {
-  const m = /^(?:お迎え|送り)引受\s*#(\d+)\s+(パパ|ママ|じいじ|ばあば)$/.exec(text.trim());
+/** 「お迎え引受 #12 ばあば」のような発言を解く。「ほか」はファミサポなど家族以外。合わなければ null */
+export function parseAccept(text: string): { slotId: number; who: Adult | "ほか" } | null {
+  const m = /^(?:お迎え|送り)引受\s*#(\d+)\s+(パパ|ママ|じいじ|ばあば|ほか)$/.exec(text.trim());
   if (!m) return null;
-  return { slotId: Number(m[1]), who: m[2] as Adult };
+  return { slotId: Number(m[1]), who: m[2] as Adult | "ほか" };
 }
 
 /** 「今日は無理」「無理」「行けない」など断りの発言か。「無理しないで」は拾ってしまう（短文を優先） */

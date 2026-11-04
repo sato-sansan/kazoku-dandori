@@ -156,6 +156,15 @@ r = await step("パパ", "Upapa", `${tmr.getUTCMonth() + 1}/${tmr.getUTCDate()}�
 check("「○/○のお迎え 取り消し」で決まった枠を戻す", /取り消しました/.test(r.text), r.text);
 r = await step("パパ", "Upapa", "段取り 明日");
 check("取り消した枠は、また家族に聞く", /お迎え、行ける人/.test(r.text), r.text);
+// 札の［ファミサポなど］（11/5 パパ「その他の項目も作って ファミサポとかもあるらしい」）
+const other = JSON.stringify(r.messages).match(/お迎え引受 #(\d+) ほか/);
+check("札に［ファミサポなど］がある", !!other, r.text);
+if (other) {
+  r = await step("ママ", "Umama", other[0]);
+  check("［ファミサポなど］で、家族には聞かない枠になる", /家族以外（ファミサポなど）/.test(r.text), r.text);
+  r = await step("パパ", "Upapa", "段取り 明日");
+  check("ファミサポなどにした枠は、もう聞かない", !/お迎え、行ける人/.test(r.text), r.text);
+}
 
 // ⑥ 数字と送信数
 r = await step("パパ", "Upapa", "段取り 数字");
