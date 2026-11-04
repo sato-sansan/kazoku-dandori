@@ -1,0 +1,105 @@
+{
+  "id": "public-16",
+  "topic": "保育所のクリスマス会（紙）。3人とも出る・持ち物がクラス別・1人300円の参加費と締切あり",
+  "input": {
+    "type": "image",
+    "image": "images/public-16.png"
+  },
+  "today": "2026-11-05",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "ゆい",
+        "kind": [
+          "行事",
+          "集金"
+        ],
+        "title": "クリスマス会",
+        "date": "2026-12-18",
+        "time": "10:00",
+        "place": "保育所",
+        "deadline": "2026-12-11",
+        "items": [
+          "赤い靴下"
+        ],
+        "money": 300
+      },
+      {
+        "child": "そうた",
+        "kind": [
+          "行事",
+          "集金"
+        ],
+        "title": "クリスマス会",
+        "date": "2026-12-18",
+        "time": "10:00",
+        "place": "保育所",
+        "deadline": "2026-12-11",
+        "items": [
+          "赤い靴下",
+          "ベスト"
+        ],
+        "money": 300
+      },
+      {
+        "child": "めい",
+        "kind": [
+          "行事",
+          "集金"
+        ],
+        "title": "クリスマス会",
+        "date": "2026-12-18",
+        "time": "10:00",
+        "place": "保育所",
+        "deadline": "2026-12-11",
+        "items": [
+          "着替え"
+        ],
+        "money": 300
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {
+      "dates": [
+        "2026-11-20"
+      ],
+      "times": [
+        "09:45"
+      ],
+      "items": [
+        "集金袋"
+      ]
+    }
+  }
+}

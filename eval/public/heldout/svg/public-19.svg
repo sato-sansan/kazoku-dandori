@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1240" viewBox="0 0 1240 1240">
+<rect width="1240" height="1240" fill="#e9e6df"/>
+<rect x="40" y="30" width="1160" height="1180" rx="8" fill="#ffffff" stroke="#c8c4bb" stroke-width="2"/>
+<rect x="40" y="30" width="1160" height="16" fill="#5fb3a6"/>
+<g font-family="Hiragino Sans, Hiragino Kaku Gothic ProN, sans-serif" fill="#222">
+<text x="90" y="120" font-size="30">発行日　2026年11月5日（木）</text>
+<text x="1150" y="120" font-size="32" text-anchor="end" font-weight="bold">ほしぞら歯科クリニック</text>
+<text x="1150" y="168" font-size="30" text-anchor="end">TEL　000-000-0000</text>
+<text x="620" y="280" font-size="56" text-anchor="middle" font-weight="bold">ご予約票</text>
+<text x="90" y="380" font-size="40">お名前　　はると　様</text>
+<line x1="90" y1="398" x2="640" y2="398" stroke="#222" stroke-width="2"/>
+<text x="90" y="470" font-size="32">　いつもご来院いただき、ありがとうございます。</text>
+<text x="90" y="520" font-size="32">次回のご予約を、下記のとおり承りました。</text>
+<rect x="90" y="560" width="1060" height="200" rx="12" fill="#eef7f5" stroke="#5fb3a6" stroke-width="3"/>
+<text x="130" y="620" font-size="34" font-weight="bold">次回ご予約</text>
+<text x="620" y="715" font-size="56" text-anchor="middle" font-weight="bold">2026年12月3日（木）　16:30</text>
+<text x="130" y="830" font-size="34">診療内容</text>
+<text x="470" y="830" font-size="34">定期検診・フッ素塗布</text>
+<text x="130" y="895" font-size="34">お持ちいただくもの</text>
+<text x="470" y="895" font-size="34">保険証・医療証・お薬手帳</text>
+<text x="130" y="985" font-size="32">※ ご予約時間の15分前までに受付をお済ませください。</text>
+<text x="130" y="1040" font-size="32">※ 変更・キャンセルは、お早めにお電話でご連絡ください。</text>
+<line x1="90" y1="1085" x2="1150" y2="1085" stroke="#999" stroke-width="2"/>
+<text x="90" y="1135" font-size="30">診療時間　9:00〜12:30／14:00〜18:30（土曜は午前のみ）</text>
+<text x="90" y="1180" font-size="30">休診日　　水曜・日曜・祝日</text>
+</g></svg>

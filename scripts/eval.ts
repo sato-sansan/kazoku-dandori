@@ -51,9 +51,12 @@ interface Case {
   };
 }
 
+/** heldout：直すのに使っていない架空のお便り（public-16〜）。public の15枚とは別に数える（11/5 追加） */
+type SetName = "public" | "private" | "heldout";
+
 interface LoadedCase {
   case: Case;
-  set: "public" | "private";
+  set: SetName;
   dir: string;
 }
 
@@ -103,8 +106,8 @@ function parseArgs(argv: string[]) {
       process.exit(1);
     }
   }
-  if (!["public", "private", "all"].includes(args.set)) {
-    console.error(`--set は public / private / all のどれか（${args.set}）`);
+  if (!["public", "private", "all", "heldout"].includes(args.set)) {
+    console.error(`--set は public / private / all / heldout のどれか（${args.set}）`);
     process.exit(1);
   }
   if (!args.tag && !args.dry) {
@@ -116,11 +119,12 @@ function parseArgs(argv: string[]) {
 
 // ── 読み込み ────────────────────────────────────────────────
 
-function loadSet(set: "public" | "private"): LoadedCase[] {
-  const dir = resolve(ROOT, "eval", set);
+function loadSet(set: SetName): LoadedCase[] {
+  // heldout の画像は eval/public/ の下に置く（コミット前の見張りが、画像を docs/assets/ と eval/public/ にしか通さない）
+  const dir = set === "heldout" ? resolve(ROOT, "eval", "public", "heldout") : resolve(ROOT, "eval", set);
   const casesDir = resolve(dir, "cases");
   if (!existsSync(casesDir)) {
-    if (set === "public") throw new Error(`評価セットが無い: ${casesDir}`);
+    if (set !== "private") throw new Error(`評価セットが無い: ${casesDir}`);
     return [];
   }
   return readdirSync(casesDir)
@@ -400,7 +404,7 @@ function appendHistory(tag: string, set: string, note: string, results: { id: st
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const sets: ("public" | "private")[] = args.set === "all" ? ["public", "private"] : [args.set as "public" | "private"];
+  const sets: SetName[] = args.set === "all" ? ["public", "private"] : [args.set as SetName];
   let loaded = sets.flatMap(loadSet);
   if (args.only.length) loaded = loaded.filter((l) => args.only.includes(l.case.id));
   if (loaded.length === 0) {
@@ -450,7 +454,7 @@ async function main() {
 
     // 実物は番号と○×だけ。題材・理由・作った値は出さない
     console.log(caseRow(c.id, g));
-    if (set === "public") {
+    if (set !== "private") {
       if (c.topic) console.log(`             ${c.topic}`);
       for (const r of g.reasons) console.log(`             × ${r}`);
       for (const f of g.fabricated) console.log(`             ${RED}⑨ 作った：${f}${RESET}`);

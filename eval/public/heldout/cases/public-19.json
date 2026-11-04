@@ -1,0 +1,72 @@
+{
+  "id": "public-19",
+  "topic": "歯科医院の予約票（紙）。はるとの次回予約・持ち物3つ（「15分前までに受付」の16:15は時刻ではない・送迎の記載なし）",
+  "input": {
+    "type": "image",
+    "image": "images/public-19.png"
+  },
+  "today": "2026-11-05",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": "通院",
+        "title": "歯科の定期検診",
+        "date": "2026-12-03",
+        "time": "16:30",
+        "place": "歯科医院",
+        "deadline": null,
+        "items": [
+          "保険証",
+          "医療証",
+          "お薬手帳"
+        ],
+        "money": null
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {
+      "dates": [
+        "2026-11-05"
+      ],
+      "times": [
+        "16:15",
+        "09:00",
+        "12:30",
+        "14:00",
+        "18:30"
+      ]
+    }
+  }
+}

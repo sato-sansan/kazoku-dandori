@@ -1,0 +1,93 @@
+{
+  "id": "public-20",
+  "topic": "小学校の「冬休みのくらしについて」（紙）。終業式は給食なし・11時30分下校 → 送迎の枠が要る／始業式は年をまたぐ（1月8日は2027年）",
+  "input": {
+    "type": "image",
+    "image": "images/public-20.png"
+  },
+  "today": "2026-11-05",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": [
+          "行事",
+          "連絡"
+        ],
+        "title": "終業式",
+        "date": "2026-12-23",
+        "time": "11:30",
+        "place": "小学校",
+        "deadline": null,
+        "items": [],
+        "money": null
+      },
+      {
+        "child": "はると",
+        "kind": "送迎",
+        "title": "下校のお迎え",
+        "date": "2026-12-23",
+        "time": "11:30",
+        "place": "小学校",
+        "deadline": null,
+        "items": [],
+        "money": null
+      },
+      {
+        "child": "はると",
+        "kind": "行事",
+        "title": "始業式",
+        "date": "2027-01-08",
+        "time": "08:20",
+        "place": "小学校",
+        "deadline": null,
+        "items": [
+          "通知表",
+          "冬休みの宿題",
+          "上ばき",
+          "ぞうきん"
+        ],
+        "money": null
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {
+      "dates": [
+        "2026-12-14",
+        "2026-12-24",
+        "2027-01-07"
+      ]
+    }
+  }
+}

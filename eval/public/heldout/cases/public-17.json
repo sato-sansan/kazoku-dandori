@@ -1,0 +1,72 @@
+{
+  "id": "public-17",
+  "topic": "小学校の個人面談の希望調査（紙）。答えは提出の締切だけ・面談の日時は後日学校が決める → 提出カード1枚",
+  "input": {
+    "type": "image",
+    "image": "images/public-17.png"
+  },
+  "today": "2026-11-05",
+  "family": {
+    "adults": [
+      "パパ",
+      "ママ",
+      "じいじ",
+      "ばあば"
+    ],
+    "children": [
+      {
+        "name": "はると",
+        "grade": "小学2年",
+        "attends": "小学校"
+      },
+      {
+        "name": "ゆい",
+        "grade": "5歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "そうた",
+        "grade": "4歳",
+        "attends": "保育所"
+      },
+      {
+        "name": "めい",
+        "grade": "2歳",
+        "attends": "保育所"
+      }
+    ]
+  },
+  "expected": {
+    "is_notice": true,
+    "cards": [
+      {
+        "child": "はると",
+        "kind": "提出",
+        "title": "個人面談の希望調査票",
+        "date": null,
+        "time": null,
+        "place": "小学校",
+        "deadline": "2026-11-27",
+        "items": [],
+        "money": null
+      }
+    ],
+    "ask_expected": false,
+    "also_written": {
+      "dates": [
+        "2026-11-20",
+        "2026-12-07",
+        "2026-12-08",
+        "2026-12-09",
+        "2026-12-10"
+      ],
+      "times": [
+        "14:30",
+        "16:30"
+      ],
+      "items": [
+        "希望調査票"
+      ]
+    }
+  }
+}

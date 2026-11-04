@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1240" viewBox="0 0 1240 1240">
+<rect width="1240" height="1240" fill="#fffdf7"/>
+<g font-family="Hiragino Mincho ProN, Hiragino Sans, serif" fill="#222">
+<text x="90" y="95" font-size="30">令和8年11月20日</text>
+<text x="90" y="140" font-size="30">2年生保護者の皆様</text>
+<text x="800" y="95" font-size="30">みなと小学校</text>
+<text x="800" y="140" font-size="30">2学年担任</text>
+<text x="620" y="240" font-size="56" text-anchor="middle" font-weight="bold">個人面談　希望調査のお願い</text>
+<text x="90" y="320" font-size="32">　朝夕の冷え込みが厳しくなってまいりました。日頃より本校の</text>
+<text x="90" y="366" font-size="32">教育活動にご協力いただき、ありがとうございます。</text>
+<text x="90" y="412" font-size="32">　さて、2学期の個人面談を下記のとおり行います。お忙しいところ</text>
+<text x="90" y="458" font-size="32">恐縮ですが、きりとり線から下の希望調査票にご記入ください。</text>
+<text x="620" y="530" font-size="38" text-anchor="middle">記</text>
+<text x="140" y="590" font-size="32">１．期　間　　12月7日（月）〜12月10日（木）</text>
+<text x="140" y="640" font-size="32">２．時　間　　各日　14時30分〜16時30分（1家庭15分程度）</text>
+<text x="140" y="690" font-size="32">３．場　所　　2年生の各教室</text>
+<text x="140" y="740" font-size="32">４．提出期限　11月27日（金）までに、担任へ</text>
+<text x="140" y="800" font-size="30">※ 面談の日時は、ご希望をもとに学校で調整し、後日お知らせします。</text>
+<text x="140" y="845" font-size="30">※ ご希望に添えない場合もありますので、ご了承ください。</text>
+<line x1="90" y1="900" x2="1150" y2="900" stroke="#222" stroke-dasharray="12 8" stroke-width="2"/>
+<rect x="530" y="880" width="180" height="40" fill="#fffdf7"/>
+<text x="620" y="911" font-size="30" text-anchor="middle">きりとり線</text>
+<text x="620" y="965" font-size="32" text-anchor="middle" font-weight="bold">個人面談　希望調査票（11月27日（金）までに担任へ提出）</text>
+<text x="90" y="1015" font-size="30">2年　　組　児童名（　　　　　　　）　保護者名（　　　　　　　）</text>
+<text x="90" y="1060" font-size="30">ご希望の日に○、ご都合の悪い日に×をご記入ください。</text>
+<g fill="none" stroke="#222" stroke-width="2">
+<rect x="90" y="1075" width="1060" height="120"/>
+<line x1="90" y1="1130" x2="1150" y2="1130"/>
+<line x1="220" y1="1075" x2="220" y2="1195"/>
+<line x1="452" y1="1075" x2="452" y2="1195"/>
+<line x1="685" y1="1075" x2="685" y2="1195"/>
+<line x1="917" y1="1075" x2="917" y2="1195"/>
+</g>
+<text x="155" y="1114" font-size="30" text-anchor="middle">日にち</text>
+<text x="336" y="1114" font-size="30" text-anchor="middle">12月7日（月）</text>
+<text x="568" y="1114" font-size="30" text-anchor="middle">12月8日（火）</text>
+<text x="801" y="1114" font-size="30" text-anchor="middle">12月9日（水）</text>
+<text x="1033" y="1114" font-size="30" text-anchor="middle">12月10日（木）</text>
+<text x="155" y="1174" font-size="30" text-anchor="middle">希　望</text>
+</g></svg>
