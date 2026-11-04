@@ -41,6 +41,7 @@ import {
   declineMessage,
   itemsMessage,
   describeSlot,
+  nextWeekday,
   parseAccept,
   parseAssignment,
   parseDay,
@@ -647,7 +648,16 @@ export class Family extends DurableObject<Env> {
 
     // デモと確認用：「段取り 明日」で19:00の処理を今やる、「段取り 冒険」で日曜のカードを今出す
     if (/^段取り[\s：:]*明日$/.test(text)) {
-      await this.askForDate(addDays(today, 1), false, queued);
+      // 金曜・土曜に打ったら、週末に聞くこと（習い事・持ち物など）が無ければ、月曜（次の平日）の分を聞く。
+      // 週末をはさむ家の段取りは月曜が本番のため（撮影 C04f）。19:00 の自動の聞き取りは変えない（月曜を2回聞かない）
+      let target = addDays(today, 1);
+      if (isWeekend(target)) {
+        const cards = this.okCards();
+        this.upsertSlots(slotsFromCards(cards, target));
+        const busy = this.slotsOf([target]).some((s) => s.status === "未定") || itemsMessage(cards, target) !== null;
+        if (!busy) target = nextWeekday(target);
+      }
+      await this.askForDate(target, false, queued);
       return;
     }
     // 確認と撮影用：「段取り 念押し」で、次の送り迎えの念押しを今（返信で）出す
@@ -1280,7 +1290,7 @@ export class Family extends DurableObject<Env> {
     const open = this.slotsOf([date]).filter((s) => s.status === "未定" || (retry && s.status === "お願い中"));
     const items = retry ? null : itemsMessage(cards, date);
     if (open.length === 0 && !items) {
-      if (queued) await this.send(queued, [{ type: "text", text: "明日の送り迎えは、全部決まっています。" }]);
+      if (queued) await this.send(queued, [{ type: "text", text: `${dayLabel(date, jstDate())}の送り迎えは、全部決まっています。` }]);
       return;
     }
     // 印と予約を先に済ませる。送れなくても、朝の聞き直しと念押しは残る

@@ -23,6 +23,18 @@ function addDays(date: string, n: number) {
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
 
+/** 土日なら次の月曜。平日はそのまま（金曜に「明日の段取り」を聞かれたら、週末をはさんで月曜を見るため） */
+export function nextWeekday(date: string): string {
+  let d = date;
+  for (let i = 0; i < 2; i++) {
+    const [y, m, dd] = d.split("-").map(Number);
+    const w = new Date(Date.UTC(y, m - 1, dd)).getUTCDay();
+    if (w !== 0 && w !== 6) break;
+    d = addDays(d, 1);
+  }
+  return d;
+}
+
 /** 「11/4（火）」。年は家族には要らない */
 function shortDate(date: string) {
   const [y, m, d] = date.split("-").map(Number);
