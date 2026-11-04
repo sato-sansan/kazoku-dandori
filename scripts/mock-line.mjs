@@ -4,7 +4,7 @@
 //   wrangler dev に --var LINE_API_BASE:http://localhost:9999 を付けて、Worker をここに向ける
 //   残りを変える: curl -X POST localhost:9999/__used -d 195   （今月使った数）
 import { createServer } from "node:http";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const port = Number(process.argv[2] ?? 9999);
 const log = process.argv[3] ?? "mock-line.jsonl";
@@ -54,6 +54,13 @@ createServer(async (req, res) => {
   m = /^\/v2\/bot\/(group|room)\/[^/]+\/member\/([^/]+)$/.exec(p);
   if (m) return NAMES[m[2]] ? json(200, { displayName: NAMES[m[2]], userId: m[2] }) : json(404, {});
   if (p.startsWith("/v2/bot/richmenu")) return json(200, { richMenuId: "richmenu-mock" });
+  // 写真の中身：メッセージID が「img-public-01-…」なら、架空のお便り eval/public/images/public-01.png を返す
+  m = /^\/v2\/bot\/message\/img-(public-\d+)-[^/]*\/content$/.exec(p);
+  if (m && existsSync(`eval/public/images/${m[1]}.png`)) {
+    record("content", { image: m[1] });
+    res.writeHead(200, { "Content-Type": "image/png" });
+    return res.end(readFileSync(`eval/public/images/${m[1]}.png`));
+  }
   if (p.endsWith("/content")) return json(404, {});
   if (p.startsWith("/v2/bot/chat/loading")) return json(202, {});
   record("unknown", { path: p });

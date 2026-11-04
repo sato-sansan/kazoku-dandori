@@ -55,5 +55,27 @@ for (const [text, want] of cases) {
 // 直前の報告の続き
 const follow = fmt(parseAssignment("はい、そうです。\nファミサポのお迎えは18:30です", today, "2026-11-05"));
 console.log(follow === "2026-11-05 迎え 18:30 - ファミサポ" ? "OK  " : (fail++, "NG  "), "続き →", follow);
+
+// 「段取り 明日」でどの日を聞くか（撮影 C04f：金曜に打つと月曜）。family.ts の分かれ道を、同じ道具（time.ts・pickup.ts）でなぞる
+const timeOut = join(mkdtempSync(join(tmpdir(), "dandori-")), "time.mjs");
+execFileSync("npx", ["--no-install", "esbuild", "src/time.ts", "--bundle", "--format=esm", "--platform=neutral", `--outfile=${timeOut}`, "--log-level=warning"]);
+const { addDays, jstWeekday } = await import(timeOut);
+const { nextWeekday } = await import(out);
+const target = (day, busy = false) => {
+  const t = addDays(day, 1);
+  const weekend = [0, 6].includes(jstWeekday(t));
+  return weekend && !busy ? nextWeekday(t) : t;
+};
+for (const [day, busy, want] of [
+  ["2026-11-05", false, "2026-11-06"], // 木 → 金
+  ["2026-11-06", false, "2026-11-09"], // 金 → 月（撮影の日）
+  ["2026-11-07", false, "2026-11-09"], // 土 → 月
+  ["2026-11-08", false, "2026-11-09"], // 日 → 月（明日がもう平日）
+  ["2026-11-06", true, "2026-11-07"], // 金でも、土曜に聞くこと（習い事など）があれば土曜
+  ["2026-11-27", false, "2026-11-30"], // 月末の金曜 → 翌週の月曜
+]) {
+  const got = target(day, busy);
+  console.log(got === want ? "OK  " : (fail++, "NG  "), `段取り 明日（${day}${busy ? "・週末に用事" : ""}）→`, got, got === want ? "" : `（期待 ${want}）`);
+}
 console.log(fail === 0 ? "ALL PASS" : `FAIL ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

@@ -57,7 +57,8 @@ const DRAFT_SCHEMA = {
     school_note: { type: "string", description: "小学校アプリの備考に貼る文。1〜2文" },
     lesson: {
       type: "string",
-      description: "習い事の先生へ2行（欠席と振替の希望）。習い事の話が出ていなければ空文字",
+      description:
+        "習い事の先生へ送る文そのもの2行（欠席と振替の希望）。「先生に伝えます」のような家族向けの文にしない。習い事の話が出ていなければ空文字",
     },
     reshuffle: {
       type: "string",
@@ -87,6 +88,8 @@ const SYSTEM_PROMPT = `あなたは、家族のLINEグループにいる「段�
 - 病名（インフルエンザなど）は親が言ったときだけ書きます。「熱」は病名ではありません。
 - 時刻は書きません。送迎の組み直しは「今日の保育所のお迎えは2人に」のように人数で書きます。
 - どの子かは <family> の呼び名から特定します。分からなければ child を空にし、ask で聞きます。
+- 子どもの呼び名は <family> の name を一字も変えずに書きます。
+- ask は、文を作るのに足りないこと（どの子か・どの日か）だけを聞きます。だれが連絡するかは聞きません。
 - 本名・学校名・園名・連絡アプリの名前は書きません。「保育所」「小学校」と書きます。
 - 文は短く、1文ずつ。読むのは祖父母のこともあります。
 - 文は「です・ます」で、宛先への連絡文としてそのまま貼れる形にします。「よろしくお願いします」で結びます。
@@ -130,12 +133,17 @@ function toDraft(raw: RawDraft, input: { profile: FamilyProfile; today: string }
     child?.attends === "保育所" || child?.attends === "小学校" ? child.attends : "不明";
   const date = raw.date && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : input.today;
 
+  const names = input.profile.children.map((c) => c.name);
+  const fix = (s: string) => fixNames(s.trim(), names);
+
   const draft: AbsenceDraft = {
     child: child?.name ?? raw.child.trim(),
     attends,
     date,
     ask: raw.ask?.trim() || null,
   };
+  // 「だれが連絡しますか」は聞かない。文を作るのに要らない（11/5 の稽古で8回に2回出た）
+  if (child && draft.ask && /どなた|だれ|誰|どちらが|パパとママ/.test(draft.ask)) draft.ask = null;
   if (!child && !draft.ask) {
     draft.ask = "どのお子さんのお休みですか？";
   }
@@ -143,14 +151,33 @@ function toDraft(raw: RawDraft, input: { profile: FamilyProfile; today: string }
     draft.nursery = {
       two_days: raw.two_days,
       reason: NURSERY_REASONS.includes(raw.nursery_reason) ? raw.nursery_reason : "家庭の都合",
-      note: raw.nursery_note.trim(),
+      note: fix(raw.nursery_note),
     };
   } else if (attends === "小学校") {
-    draft.school = { date, reason: raw.school_reason.trim(), note: raw.school_note.trim() };
+    draft.school = { date, reason: raw.school_reason.trim(), note: fix(raw.school_note) };
   }
-  if (raw.lesson.trim()) draft.lesson = raw.lesson.trim();
-  if (raw.reshuffle.trim()) draft.reshuffle = raw.reshuffle.trim();
+  if (raw.lesson.trim()) draft.lesson = fix(raw.lesson);
+  // 組み直しは、同じ保育所に通うきょうだいが残るときだけ（「今日の保育所のお迎えは2人に」）。
+  // 小学校には毎日の送迎の枠が無く、「1人分減ります」のような意味のない文になった（11/5 の稽古）
+  const siblings = input.profile.children.filter((c) => c.attends === "保育所" && c.name !== child?.name).length;
+  if (raw.reshuffle.trim() && attends === "保育所" && siblings > 0) draft.reshuffle = fix(raw.reshuffle);
   return draft;
+}
+
+/**
+ * 呼び名の写し間違いを直す。「はると」が「はるは本日…」と1字欠けた（11/5 の稽古で9回に2回）。
+ * 3字以上の呼び名で、文に正しい呼び名が1度も出てこないときだけ。文の頭か句読点・「本日」などの直後で、
+ * すぐ後ろが助詞のときに限る（呼び名の最後の字と同じ助詞は除く：「はると」の「と」）
+ */
+export function fixNames(text: string, names: string[]): string {
+  let out = text;
+  for (const name of names) {
+    if (name.length < 3 || out.includes(name)) continue;
+    const head = name.slice(0, -1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const particles = "はがのをにもへ".replace(name.slice(-1), "");
+    out = out.replace(new RegExp(`(?<=^|[、。「\\s　]|本日|今日|明日)${head}(?=[${particles}])`, "g"), name);
+  }
+  return out;
 }
 
 /**

@@ -2008,18 +2008,27 @@ function summarizeCards(cards: Card[], profile: FamilyProfile): string {
   const shown = [...groups.values()].filter(
     ({ card }) => !(card.kind === "送迎" && card.who_acts === "未定" && cards.some((o) => o !== card && o.kind !== "送迎" && o.date === card.date && card.title.startsWith(o.title))),
   );
-  const rows = shown.sort((a, b) => (a.card.date ?? "9999").localeCompare(b.card.date ?? "9999"));
+  // 日付の無い提出・集金は締切の日で並べる
+  const sortKey = (c: Card) => c.date ?? c.deadline ?? "9999";
+  const rows = shown.sort((a, b) => sortKey(a.card).localeCompare(sortKey(b.card)));
   const lines = rows.map(({ children, card }) => {
     const known = children.filter((n) => n && n !== "未定" && n !== "不明");
     const names =
       known.includes("全員") || (all.length > 1 && all.every((n) => known.includes(n))) ? "全員" : known.join("・");
     const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}（${"日月火水木金土"[jstWeekday(d)]}）`;
-    const when = card.date ? `${md(card.date)}${card.time ? ` ${card.time}` : ""}` : "日にち未定";
+    // 日付が無くても締切があれば「11/12（木）まで」。「日にち未定」と出すと、締切まで読めていないように見えた（11/5 の稽古）
+    const when = card.date
+      ? `${md(card.date)}${card.time ? ` ${card.time}` : ""}`
+      : card.deadline
+        ? `${md(card.deadline)}まで`
+        : card.ask
+          ? "日にち確認中"
+          : "日にち未定";
     const extra = [
       card.who_acts !== "未定" ? card.who_acts : "",
       card.items.length > 0 ? card.items.slice(0, 3).join("・") : "",
       card.money ? `${card.money.toLocaleString("ja-JP")}円` : "",
-      card.deadline ? `締切 ${md(card.deadline)}` : "",
+      card.deadline && card.date ? `締切 ${md(card.deadline)}` : "",
     ].filter(Boolean);
     return `${names ? `${names}：` : ""}${when} ${card.title}${extra.length > 0 ? `（${extra.join("、")}）` : ""}`;
   });
