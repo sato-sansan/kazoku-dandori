@@ -663,7 +663,8 @@ export class Family extends DurableObject<Env> {
     // 確認と撮影用：「段取り 念押し」で、次の送り迎えの念押しを今（返信で）出す
     if (/^段取り[\s：:]*念押し$/.test(text)) {
       const now = jstTime();
-      const next = this.slotsOf([today, addDays(today, 1)]).find((s) => s.status !== "取消" && (s.date > today || s.time >= now));
+      // ファミサポ・お休み（不要）の枠には念押しを出さない（11/5 の見直し）
+      const next = this.slotsOf([today, addDays(today, 1)]).find((s) => s.status !== "取消" && s.status !== "不要" && (s.date > today || s.time >= now));
       await this.send(queued, [
         next ? (next.status === "決定" ? reminderMessage(next) : undecidedMessage(next)) : { type: "text", text: "これからの送り迎えはありません。" },
       ]);
@@ -686,6 +687,24 @@ export class Family extends DurableObject<Env> {
     const assigned = parseAssignment(text, today, this.recentAssignDate());
     if (assigned) {
       await this.applyAssignment(queued, assigned, today, text);
+      return;
+    }
+
+    // 「12/4のお迎え 取り消し」：決まった報告の読み違い（11/5：「4日…でした」を 12/4 と読んだ）を戻す。
+    // その枠を「まだ決まっていない」にし、引き受けの記録と念押しも消す。日と送迎の言葉が無ければ下の「白紙」へ
+    const cancel = /(迎え|むかえ|送り|おくり).{0,6}(取り消|取消|とりけし|キャンセル)/.exec(text);
+    const cancelDate = cancel ? parseDay(text, today) : null;
+    const cancelled = cancelDate
+      ? this.slotsOf([cancelDate]).find((s) => s.kind === (/迎え|むかえ/.test(cancel![1]) ? "迎え" : "送り") && (s.status === "決定" || s.status === "不要"))
+      : undefined;
+    if (cancelled) {
+      this.sql.exec("UPDATE slots SET who = NULL, status = '未定', note = NULL WHERE id = ?", cancelled.id);
+      this.sql.exec("DELETE FROM events WHERE slot_id = ? AND kind IN ('引受', '急な引受')", cancelled.id);
+      this.sql.exec("DELETE FROM jobs WHERE type = 'reminder' AND (payload = ? OR payload LIKE ?)", String(cancelled.id), `${cancelled.id}|%`);
+      this.sql.exec("DELETE FROM settings WHERE key = ?", `reminded.${cancelled.id}`);
+      await this.send(queued, [
+        { type: "text", text: `↩️ ${describeSlot(cancelled, today)}（${cancelled.who ?? cancelled.note ?? ""}）を取り消しました。まだ決まっていない枠に戻しました。` },
+      ]);
       return;
     }
 
@@ -830,24 +849,45 @@ export class Family extends DurableObject<Env> {
     for (const a of list) {
       const slot = this.slotFor(a.date, a.kind, a.time);
       const time = a.time ?? slot.time;
+      // 済んだ日の話（「4日のお迎えはママでした」）は記録の直し。ありがとうの促しも念押しも出さない
+      const done = a.date < today;
+      // 「N日」が過ぎていて来月と読んだとき（日付に月が書いていない）。ちがったら取り消せるように一言添える
+      const nextMonth = !done && a.date > addDays(today, 20) && !/月|\//.test(text);
       if (a.who) {
         const same = slot.status === "決定" && slot.who === a.who && slot.time === time;
+        // 別の人に決まっていた枠を直す（「ばあばではなくママでした」）。引き受けの記録は1枠1つのまま（数を増やさない）
+        const before = slot.status === "決定" && slot.who && slot.who !== a.who ? slot.who : null;
         this.sql.exec("UPDATE slots SET time = ?, who = ?, status = '決定', note = NULL WHERE id = ?", time, a.who, slot.id);
         const decided: Slot = { ...slot, time, who: a.who, status: "決定", note: undefined };
         const said = describeSlot(decided, today);
-        lines.push(`✅ ${said}は ${a.who}。`);
+        lines.push(`✅ ${said}は ${a.who}${before ? `（${before}から直しました）` : ""}。`);
+        if (nextMonth) lines.push(`（来月の${Number(a.date.slice(8, 10))}日として入れました。ちがったら「${Number(a.date.slice(5, 7))}/${Number(a.date.slice(8, 10))}の${a.kind === "迎え" ? "お迎え" : "送り"} 取り消し」）`);
         if (same) continue;
         const kind = slot.date === today ? "急な引受" : "引受";
-        const ev = this.sql
-          .exec<{ id: number }>("INSERT INTO events (at, kind, who, slot_id, note) VALUES (?, ?, ?, ?, ?) RETURNING id", Date.now(), kind, a.who, slot.id, said)
-          .one();
-        extra.push(thanksPrompt({ id: ev.id, at: Date.now(), kind, who: a.who, slotId: slot.id, note: said }));
+        const prev = before
+          ? this.sql
+              .exec<{ id: number }>("SELECT id FROM events WHERE slot_id = ? AND kind IN ('引受', '急な引受') ORDER BY id DESC LIMIT 1", slot.id)
+              .toArray()[0]
+          : undefined;
+        let eventId: number;
+        if (prev) {
+          this.sql.exec("UPDATE events SET who = ?, note = ? WHERE id = ?", a.who, said, prev.id);
+          eventId = prev.id;
+        } else {
+          eventId = this.sql
+            .exec<{ id: number }>("INSERT INTO events (at, kind, who, slot_id, note) VALUES (?, ?, ?, ?, ?) RETURNING id", Date.now(), kind, a.who, slot.id, said)
+            .one().id;
+        }
+        if (done) continue;
+        extra.push(thanksPrompt({ id: eventId, at: Date.now(), kind, who: a.who, slotId: slot.id, note: said }));
         // 担当が変わったら念押しはやり直し（1回だけ）
         this.sql.exec("DELETE FROM settings WHERE key = ?", `reminded.${slot.id}`);
         this.addReminder(decided);
       } else {
         this.sql.exec("UPDATE slots SET time = ?, who = NULL, status = '不要', note = ? WHERE id = ?", time, a.note, slot.id);
         this.sql.exec("DELETE FROM jobs WHERE type = 'reminder' AND (payload = ? OR payload LIKE ?)", String(slot.id), `${slot.id}|%`);
+        // 家族のだれかが引き受けていた枠なら、その引き受けは無かったことに（行っていない人の数を増やさない）
+        this.sql.exec("DELETE FROM events WHERE slot_id = ? AND kind IN ('引受', '急な引受')", slot.id);
         if (a.note !== "お休み") lines.push(`✅ ${describeSlot({ ...slot, time }, today, a.time !== null)}は ${a.note}。家族に「行ける人？」は聞きません。`);
       }
     }
@@ -1287,7 +1327,8 @@ export class Family extends DurableObject<Env> {
     const cards = this.okCards();
     this.upsertSlots(slotsFromCards(cards, date));
 
-    const open = this.slotsOf([date]).filter((s) => s.status === "未定" || (retry && s.status === "お願い中"));
+    // 「段取り 明日」（queued）は、もう聞いている枠も出し直す。撮り直しで2回目に打つと「全部決まっています」と返していた（11/5 の見直し）
+    const open = this.slotsOf([date]).filter((s) => s.status === "未定" || ((retry || !!queued) && s.status === "お願い中"));
     const items = retry ? null : itemsMessage(cards, date);
     if (open.length === 0 && !items) {
       if (queued) await this.send(queued, [{ type: "text", text: `${dayLabel(date, jstDate())}の送り迎えは、全部決まっています。` }]);

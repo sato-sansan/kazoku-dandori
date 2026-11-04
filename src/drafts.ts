@@ -186,7 +186,10 @@ export function fixNames(text: string, names: string[]): string {
  */
 export function groupAbsence(text: string, profile: FamilyProfile, today: string, date: string): AbsenceDraft[] | null {
   const named = profile.children.filter((c) => text.includes(c.name));
-  const all = /全員|みんな|\d人とも|３人とも|きょうだい|兄弟|姉妹/.test(text);
+  // 「全員」は「休み」のすぐ前にあるときだけ（11/5 の見直し：「そうた熱で休み、みんなにうつらないといいけど」で4人分の文が出た）。
+  // ボタンの「休みの連絡 11/16 全員」と、選んで進む「今日 全員 体調不良 休み」も全員
+  const all =
+    /(全員|みんな|\d人とも|３人とも|きょうだい|兄弟|姉妹)[^。\n、]{0,8}(休み|欠席|休ませ)/.test(text) || /^休みの連絡\s.*全員$/.test(text.trim());
   if (!all && named.length < 2) return null;
   const nurseryWord = /保育|こども園|子供園|子ども園|幼稚園|園/.test(text);
   const schoolWord = /学校|小学/.test(text);

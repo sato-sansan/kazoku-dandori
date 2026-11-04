@@ -145,6 +145,18 @@ r = await step("パパ", "Upapa", "学童から：12月の土曜開所日の申�
 r = await step("パパ", "Upapa", "これは一旦全部白紙にして");
 check("確かめ中の内容を消す", /消しました/.test(r.text), r.text);
 
+// ⑦ 11/5 朝の言い方：済んだ日の直し・「AではなくB」・読み違いの取り消し
+// （11/5 7:31：「4日のお迎えはママでした」を 12/4 のこととして入れた。名前が2つ並ぶ直しには黙った）
+r = await step("ママ", "Umama", "昨日のお迎えはばぁばではなくママでした");
+check("済んだ日の直し：昨日のお迎えはママ（ありがとうの促しは出さない）", /✅ .*お迎えは ママ/.test(r.text) && !/をどうぞ/.test(r.text), r.text);
+r = await step("パパ", "Upapa", "明日のお迎えはばあばではなくじいじです");
+check("決まっていた人を直す：（ばあばから直しました）", /お迎えは じいじ（ばあばから直しました）/.test(r.text), r.text);
+const tmr = new Date(Date.now() + 9 * 3600_000 + 86_400_000);
+r = await step("パパ", "Upapa", `${tmr.getUTCMonth() + 1}/${tmr.getUTCDate()}のお迎え 取り消し`);
+check("「○/○のお迎え 取り消し」で決まった枠を戻す", /取り消しました/.test(r.text), r.text);
+r = await step("パパ", "Upapa", "段取り 明日");
+check("取り消した枠は、また家族に聞く", /お迎え、行ける人/.test(r.text), r.text);
+
 // ⑥ 数字と送信数
 r = await step("パパ", "Upapa", "段取り 数字");
 check("LINE の残りが出る", /LINE の今月の残り：5通/.test(r.text), r.text);

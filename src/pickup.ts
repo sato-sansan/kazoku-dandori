@@ -232,10 +232,16 @@ function toHalfWidth(text: string) {
 }
 
 /** 「明日17時のお迎え頼んでおいて」のような1対1の頼みを解く。日付は today（YYYY-MM-DD、JST）基準で「明日」「あした」「今日」を解釈。時刻がなければ 17:30。合わなければ null */
-/** 「今日」「明日」「明後日」「5日」「11/5」「11月5日」を日付に。日の言葉が無ければ null */
-export function parseDay(text: string, today: string): string | null {
+/**
+ * 「今日」「明日」「明後日」「5日」「11/5」「11月5日」を日付に。日の言葉が無ければ null。
+ * past：済んだ話（「4日のお迎えはママでした」）。過ぎた日を来月・来年にせず、「昨日」「月曜」も前の日として読む（11/5：「4日」を 12/4 と読んだ）
+ */
+export function parseDay(text: string, today: string, options?: { past?: boolean }): string | null {
   const t = toHalfWidth(text);
+  const past = options?.past ?? false;
   if (/今日|きょう/.test(t)) return today;
+  if (past && /一昨日|おととい/.test(t)) return addDays(today, -2);
+  if (past && /昨日|きのう/.test(t)) return addDays(today, -1);
   if (/明後日|あさって/.test(t)) return addDays(today, 2);
   if (/明日|あした/.test(t)) return addDays(today, 1);
   const [y, m0, d0] = today.split("-").map(Number);
@@ -248,18 +254,19 @@ export function parseDay(text: string, today: string): string | null {
   if (md) {
     const m = Number(md[1]);
     const d = Number(md[2]);
-    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return iso(m < m0 ? y + 1 : y, m, d);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return iso(past ? (m > m0 ? y - 1 : y) : m < m0 ? y + 1 : y, m, d);
   }
-  // 「5日」：今月のその日。もう過ぎていれば来月
+  // 「5日」：今月のその日。もう過ぎていれば来月（済んだ話なら今月のまま）
   const dd = /(?:^|[^\d/:])(\d{1,2})日(?![\d:])/.exec(t);
   if (dd) {
     const d = Number(dd[1]);
     if (d >= 1 && d <= 31) {
-      if (d >= d0) return iso(y, m0, d) ?? (m0 === 12 ? iso(y + 1, 1, d) : iso(y, m0 + 1, d));
+      if (d >= d0 || past) return iso(y, m0, d) ?? (m0 === 12 ? iso(y + 1, 1, d) : iso(y, m0 + 1, d));
       return m0 === 12 ? iso(y + 1, 1, d) : iso(y, m0 + 1, d);
     }
   }
-  // 「金曜」「木曜日」：今日から数えて次のその曜日（今日がその曜日なら今日）。「来週の金曜」は来週の月〜日の中
+  // 「金曜」「木曜日」：今日から数えて次のその曜日（今日がその曜日なら今日）。「来週の金曜」は来週の月〜日の中。
+  // 済んだ話なら、いちばん近い前のその曜日（今日がその曜日なら今日）
   const wk = /(来週の?)?([月火水木金土日])曜/.exec(t);
   if (wk) {
     const target = WEEKDAY.indexOf(wk[2]);
@@ -268,6 +275,7 @@ export function parseDay(text: string, today: string): string | null {
       const nextMonday = addDays(today, ((8 - wd) % 7) || 7);
       return addDays(nextMonday, (target + 6) % 7);
     }
+    if (past) return addDays(today, -((wd - target + 7) % 7));
     return addDays(today, (target - wd + 7) % 7);
   }
   return null;
@@ -305,15 +313,20 @@ export function parseRequest(
 }
 
 /** 家族の呼び方の言い換え。「おばあちゃん」「ばーば」「お父さん」も ばあば・パパ として読む */
+// ひらがなの「まま」「ぱぱ」は「このまま」に、「夫」は「大丈夫」に紛れるので使わない（11/5 の見直し）。
+// 「お義母さん」「義父」は じいじ・ばあば（パパ・ママを見るときは消してから見る）
 export const ROLE_WORDS: Record<Adult, string> = {
-  パパ: "パパ|ぱぱ|お父さん|おとうさん|父|夫|旦那",
-  ママ: "ママ|まま|お母さん|おかあさん|母|妻|嫁",
-  じいじ: "じいじ|じぃじ|じーじ|おじいちゃん|祖父",
-  ばあば: "ばあば|ばぁば|ばーば|おばあちゃん|祖母",
+  パパ: "パパ|お父さん|おとうさん|父|(?<![丈工])夫|旦那",
+  ママ: "ママ(?!友)|お母さん|おかあさん|母|妻|嫁",
+  じいじ: "じいじ|じぃじ|じーじ|おじいちゃん|祖父|お義父さん|義父",
+  ばあば: "ばあば|ばぁば|ばーば|おばあちゃん|祖母|お義母さん|義母",
 };
 
-/** 家族以外の担当。ファミサポに頼んだ日は、家族に「行ける人？」と聞かない */
-const HELPER = /ファミサポ|ファミリーサポート|ファミリー・サポート|シッター|延長保育|学童|ママ友|お友達|友だち|友達/;
+/**
+ * 家族以外の人が迎えに行く。ファミサポに頼んだ日は、家族に「行ける人？」と聞かない。
+ * 学童・延長保育は「場所」で、あとで家族が迎えに行くので入れない（11/5 の見直し：「学童のお迎えはばあば」が「家族は行かない」になった）
+ */
+const HELPER = /ファミサポ|ファミリーサポート|ファミリー・サポート|シッター|ママ友|お友達|友だち|友達/;
 
 /** 決まった報告：その日の送り／迎えを、だれがするか（家族以外・なしも） */
 export interface Assignment {
@@ -326,14 +339,17 @@ export interface Assignment {
   note: string | null;
 }
 
-/** 「5時迎え」は 17:00。お迎えで12時より前の数字は午後とみなす（「朝」「午前」と書いてあれば別） */
+/**
+ * 「5時迎え」は 17:00。お迎えで 1〜7時は午後とみなす（「朝」「午前」と書いてあれば別）。
+ * 「11時」「10時半」の早いお迎えはそのまま。「1時間」は時刻ではない（11/5 の見直し：11時が 23:00 になった）
+ */
 function parseTime(line: string, kind: "送り" | "迎え"): string | null {
-  const m = /(\d{1,2})(?::(\d{2})|時(半|(\d{1,2})分)?)/.exec(line);
+  const m = /(\d{1,2})(?::(\d{2})|時(?!間)(半|(\d{1,2})分)?)/.exec(line);
   if (!m) return null;
   let h = Number(m[1]);
   const min = m[2] ?? (m[3] === "半" ? "30" : (m[4] ?? "0"));
   if (h >= 24 || Number(min) >= 60) return null;
-  if (kind === "迎え" && h < 12 && !/朝|午前/.test(line)) h += 12;
+  if (kind === "迎え" && h >= 1 && h <= 7 && !/朝|午前/.test(line)) h += 12;
   return `${String(h).padStart(2, "0")}:${min.padStart(2, "0")}`;
 }
 
@@ -348,8 +364,12 @@ function parseTime(line: string, kind: "送り" | "迎え"): string | null {
  */
 export function parseAssignment(text: string, today: string, recentDate?: string | null): Assignment[] | null {
   const t = toHalfWidth(text).trim();
-  // 頼み・問いかけ・断り・連絡文の頼みは別の道（名前ボタン・聞き直し・休みの連絡）
-  if (/[?？]|頼んで|たのんで|頼んど|たのんど|頼める|お願いして|お願いしと|お願いでき|聞いと|きいと|依頼して|聞いて|きいて|行ける|いける|行けない|いけない|だれか|誰か|難しい|むずかしい|無理|むり|ダメ|だめ|都合が悪|連絡文/.test(t)) {
+  // 頼み・問いかけ・断り・迷い・連絡文の頼みは別の道（名前ボタン・聞き直し・休みの連絡）
+  // 11/5 の見直しで足した：「行けなくなりました」「ばあばにお願いします」「パパですか」「パパでいいかな」「パパかも」
+  if (
+    /[?？]|頼んで|たのんで|頼んど|たのんど|頼める|頼みたい|お願いして|お願いしと|お願いでき|にお願いします|にお願いしたい|聞いと|きいと|依頼して|聞いて|きいて|行ける|いける|行けない|いけない|行けなく|いけなく|行けません|いけません|来られな|来れな|できな|できません|だれか|誰か|だれが|誰が|どうする|どうしよう|どっち|どちらが|難しい|むずかしい|無理|むり|ダメ|だめ|都合が悪|連絡文|ですか|ますか|でしょうか|かも|たぶん|多分|未定|決まってない|決まっていない/.test(t) ||
+    /(かな|かしら)[ー〜!！。\s　]*($|\n)/.test(t)
+  ) {
     return null;
   }
   // いつのことか：その話をしている文の中の日付 → 全体の日付 → 少し前の報告の日
@@ -359,16 +379,21 @@ export function parseAssignment(text: string, today: string, recentDate?: string
   // （「きょうのかれんだーにいれて 16日は全員お休み」の 16日 を取る。parseDay は「今日」を先に見るので、日付の言葉だけを渡す）
   // 「28日土曜」「11/5(木)」は日付と曜日をひとまとまりに（「土曜」だけを読んで別の週にしない）
   const WD = "(?:[（(]?[月火水木金土日](?:曜日?)?[)）]?)?";
-  const DAY = new RegExp(`\\d{1,2}[/月]\\d{1,2}日?${WD}|\\d{1,2}日${WD}|(来週の?)?[月火水木金土日]曜|今日|きょう|明後日|あさって|明日|あした`, "g");
-  const dayNear = (part: string, at: number) => {
+  const DAY = new RegExp(
+    `\\d{1,2}[/月]\\d{1,2}日?${WD}|\\d{1,2}日${WD}|(来週の?)?[月火水木金土日]曜|今日|きょう|一昨日|おととい|昨日|きのう|明後日|あさって|明日|あした`,
+    "g",
+  );
+  const dayNear = (part: string, at: number, past = false) => {
     const found = [...part.matchAll(DAY)];
     const pick = found.filter((m) => (m.index ?? 0) <= at).pop() ?? found[0];
-    return pick ? parseDay(pick[0], today) : null;
+    return pick ? parseDay(pick[0], today, { past }) : null;
   };
-  const dayOf = (part: string, at = part.length) => dayNear(part, at) ?? dayNear(t, t.length) ?? recentDate ?? null;
+  const dayOf = (part: string, at = part.length, past = false) =>
+    dayNear(part, at, past) ?? dayNear(t, t.length, past) ?? recentDate ?? null;
 
-  // 全員お休み：その日は送りも迎えも要らない
-  const allOff = /(全員|みんな|\d人とも|きょうだい).{0,12}(休み|やすみ|欠席)|(休み|やすみ|欠席).{0,6}(全員|みんな)/;
+  // 全員お休み：その日は送りも迎えも要らない。「全員」のすぐあとの「休み」だけ（11/5 の見直し：
+  // 「みんなおやすみ」のあいさつ・「そうた休み、みんなごめんね」で、その日の送り迎えが消えた）
+  const allOff = /(全員|みんな|\d人とも|きょうだい)[^。\n、]{0,4}(休み|欠席)/;
   const offPart = sentences.find((x) => allOff.test(x));
   if (offPart) {
     const date = dayOf(offPart, allOff.exec(offPart)?.index ?? offPart.length);
@@ -381,34 +406,51 @@ export function parseAssignment(text: string, today: string, recentDate?: string
     const none = noneRe.exec(nonePart)!;
     const date = dayOf(nonePart, none.index);
     if (!date) return null;
-    return [{ date, kind: /迎え/.test(none[1]) ? "迎え" : "送り", time: null, who: null, note: /休み|やすみ|欠席/.test(t) ? "お休み" : "なし" }];
+    const note = /休み|欠席/.test(t) ? "お休み" : "なし";
+    // 「送り迎えなし」は両方
+    const kinds: ("送り" | "迎え")[] = /送り迎え|送迎|送りも迎えも/.test(nonePart) ? ["送り", "迎え"] : [/迎え/.test(none[1]) ? "迎え" : "送り"];
+    return kinds.map((kind) => ({ date, kind, time: null, who: null, note }));
   }
-
-  // 送り／迎えの言葉がある最初の行で、だれが・何時かを読む
-  const line = t.split(/\n/).find((l) => /迎え|むかえ|送り|おくり/.test(l));
-  if (!line) return null;
-  const kind: "送り" | "迎え" = /迎え|むかえ/.test(line) ? "迎え" : "送り";
-  const helper = HELPER.exec(line)?.[0] ?? null;
-  // 「祖父」の「父」を パパ と読まない
-  const withoutGrand = line.replace(/祖父|祖母/g, "");
-  const roles = ADULTS.filter((a) => new RegExp(ROLE_WORDS[a]).test(a === "パパ" || a === "ママ" ? withoutGrand : line));
-  // 2人の名前が並ぶ行（「パパ、ママ遅番」）は決めつけない
-  const who = helper ? null : roles.length === 1 ? roles[0] : null;
-  if (!helper && !who) return null;
 
   // 報告の言い方か。行の終わりが呼び名（「お迎え パパ」）でもよい
   const said = /になりました|になった|になります|に決ま|で決ま|決まりました|です|でーす|だよ|入れて|いれて|行きます|いきます|行く|いく|やります|担当|頼みました|頼んだ|たのんだ|お願いしました|お願いした|依頼しました|依頼した|します|行ってくれ|が行|がお迎え|が送り/.test(t);
-  const tail = line.replace(/[\s　。、！!]+$/, "");
-  const name = helper ?? (who ? ROLE_WORDS[who] : "$^");
-  const endsWithName = new RegExp(`(${name})(さん|ちゃん)?$`).test(tail);
-  // 「お迎え パパ」「送り：ばあば」のように、送り／迎えのすぐあとに名前（行の途中でも）
-  // 名前のあとは区切りか行の終わり（「送りパパが寝坊しないか心配」は報告ではない）
-  const kindThenName = new RegExp(`(迎え|送り)(は|を)?[\\s　、:：]*(${name})(さん|ちゃん)?([\\s　、。！!]|で|です|$)`).test(line);
-  if (!said && !endsWithName && !kindThenName) return null;
+  // 「ばあばではなくママ」「パパの代わりにばあば」：打ち消された方は数えない（11/5：2人の名前が並んで読めず、黙った）
+  const people = `${Object.values(ROLE_WORDS).join("|")}|${HELPER.source}`;
+  const notThis = new RegExp(`(${people})(さん|ちゃん)?((では|じゃ)なく(て)?|の(代わり|かわり)に?)`, "g");
 
-  const date = dayOf(line, line.search(/迎え|むかえ|送り|おくり/));
-  if (!date) return null;
-  return [{ date, kind, time: parseTime(line, kind), who, note: helper }];
+  // 送り／迎えの言葉がある文ごとに、だれが・何時かを読む
+  // （11/5：「4日のお迎えはママでした。5日はファミサポさんに…」の2つ目を読み落とした）
+  const found = new Map<string, Assignment>();
+  for (const raw of t.split(/[\n。]/).filter((l) => /迎え|むかえ|送り|おくり/.test(l) && !/おくりもの|贈り/.test(l))) {
+    const line = raw.replace(notThis, "");
+    // 「送り迎えはばあば」は両方（11/5 の見直し：迎えだけになった）
+    const kinds: ("送り" | "迎え")[] = /送り迎え|送迎|送りも迎えも/.test(line) ? ["送り", "迎え"] : [/迎え|むかえ/.test(line) ? "迎え" : "送り"];
+    const helper = HELPER.exec(line)?.[0] ?? null;
+    // 「祖父」「義母」の「父」「母」を パパ・ママ と読まない
+    const withoutGrand = line.replace(/祖父|祖母|義父|義母/g, "");
+    const roles = ADULTS.filter((a) => new RegExp(ROLE_WORDS[a]).test(a === "パパ" || a === "ママ" ? withoutGrand : line));
+    // 2人の名前が並ぶ文（「パパ、ママ遅番」）は決めつけない
+    const who = helper ? null : roles.length === 1 ? roles[0] : null;
+    if (!helper && !who) continue;
+
+    const tail = line.replace(/[\s　。、！!]+$/, "");
+    const name = helper ?? (who ? ROLE_WORDS[who] : "$^");
+    const endsWithName = new RegExp(`(${name})(さん|ちゃん)?$`).test(tail);
+    // 「お迎え パパ」「送り：ばあば」のように、送り／迎えのすぐあとに名前（行の途中でも）
+    // 名前のあとは区切りか行の終わり（「送りパパが寝坊しないか心配」は報告ではない）。「パパでした」「パパだった」も
+    const kindThenName = new RegExp(`(迎え|送り)(は|を)?[\\s　、:：]*(${name})(さん|ちゃん)?([\\s　、。！!]|で|です|だ|$)`).test(line);
+    if (!said && !endsWithName && !kindThenName) continue;
+
+    // 済んだ話（「でした」「行った」）なら、過ぎた日を来月にしない。「ばあばになりました」はこれからの話
+    const past = /でした|だった|行きました|いきました|行った|いった|行ってくれた|迎えた|送った|送りました|やりました/.test(line) && !/になりました|決まりました/.test(line);
+    const at = line.search(/迎え|むかえ|送り|おくり/);
+    // 「来週から」「毎週」のように、この文が別の日のことなら、ほかの文や少し前の報告の日を当てはめない
+    if (!dayNear(line, at, past) && /再来週|来週|来月|毎週|毎日|いつも|ずっと|今後|これから/.test(line)) continue;
+    const date = dayOf(line, at, past);
+    if (!date) continue;
+    for (const kind of kinds) found.set(`${date}|${kind}`, { date, kind, time: parseTime(line, kind), who, note: helper });
+  }
+  return found.size > 0 ? [...found.values()] : null;
 }
 
 /** 枠の説明文「明日 17:30、保育所3人のお迎え」のような短い1行 */
