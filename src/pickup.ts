@@ -323,8 +323,9 @@ export function parseRequest(
 // ひらがなの「まま」「ぱぱ」は「このまま」に、「夫」は「大丈夫」に紛れるので使わない（11/5 の見直し）。
 // 「お義母さん」「義父」は じいじ・ばあば（パパ・ママを見るときは消してから見る）
 export const ROLE_WORDS: Record<Adult, string> = {
-  パパ: "パパ|お父さん|おとうさん|父|(?<![丈工])夫|旦那",
-  ママ: "ママ(?!友)|お母さん|おかあさん|母|妻|嫁",
+  // ひらがなは、名前が来る所（文の頭・区切り・「は」「が」「も」のあと）で、すぐあとが助詞か区切りのときだけ（11/5 夜の見直し）
+  パパ: "パパ|(?<=^|[\\s　、。:：]|[はがも](?<!わが|すが))ぱぱ(?=さん|ちゃん|が|は|も|に|へ|で|だ|[\\s　、。！!]|$)|お父さん|おとうさん|父|(?<![丈工])夫|旦那",
+  ママ: "ママ(?!友)|(?<=^|[\\s　、。:：]|[はがも](?<!わが|すが))まま(?=さん|ちゃん|が|は|も|に|へ|で|だ|[\\s　、。！!]|$)|お母さん|おかあさん|母|妻|嫁",
   じいじ: "じいじ|じぃじ|じーじ|おじいちゃん|祖父|お義父さん|義父",
   ばあば: "ばあば|ばぁば|ばーば|おばあちゃん|祖母|お義母さん|義母",
 };
@@ -356,7 +357,7 @@ function parseTime(line: string, kind: "送り" | "迎え"): string | null {
   let h = Number(m[1]);
   const min = m[2] ?? (m[3] === "半" ? "30" : (m[4] ?? "0"));
   if (h >= 24 || Number(min) >= 60) return null;
-  if (kind === "迎え" && h >= 1 && h <= 7 && !/朝|午前/.test(line)) h += 12;
+  if (kind === "迎え" && h >= 1 && h <= 9 && !/朝|午前/.test(line)) h += 12;
   return `${String(h).padStart(2, "0")}:${min.padStart(2, "0")}`;
 }
 
@@ -371,14 +372,18 @@ function parseTime(line: string, kind: "送り" | "迎え"): string | null {
  */
 export function parseAssignment(text: string, today: string, recentDate?: string | null): Assignment[] | null {
   const t = toHalfWidth(text).trim();
-  // 頼み・問いかけ・断り・迷い・連絡文の頼みは別の道（名前ボタン・聞き直し・休みの連絡）
-  // 11/5 の見直しで足した：「行けなくなりました」「ばあばにお願いします」「パパですか」「パパでいいかな」「パパかも」
+  // 頼み・問いかけ・断り・連絡文の頼みは別の道（名前ボタン・聞き直し・休みの連絡）。発言のどこにあっても止める
+  // 11/5 の見直しで足した：「行けなくなりました」「ばあばにお願いします」。ファミサポなど家族以外に「お願いします」は頼んだ報告
   if (
-    /[?？]|頼んで|たのんで|頼んど|たのんど|頼める|頼みたい|お願いして|お願いしと|お願いでき|にお願いします|にお願いしたい|聞いと|きいと|依頼して|聞いて|きいて|行ける|いける|行けない|いけない|行けなく|いけなく|行けません|いけません|行かない|いかない|行かれない|行きません|いきません|送りません|迎えません|来られな|来れな|できな|できません|送れな|迎えられな|間に合わ|抜けられ|休めな|だれか|誰か|だれが|誰が|どうする|どうしよう|どうやって|どっち|どちらが|難しい|むずかしい|厳し|無理|むり|ダメ|だめ|都合が悪|心配|連絡文|ですか|ますか|でしょうか|かも|たぶん|多分|未定|決まってない|決まっていない|じゃない|ではない/.test(t) ||
-    /(かな|かしら)[ー〜!！。\s　]*($|\n)/.test(t)
+    /[?？]|頼んで|たのんで|頼んど|たのんど|頼める|頼みたい|お願いして|お願いしと|お願いでき|(?<!(?:ファミサポ|ファミリーサポート|ファミリー・サポート|シッター|ママ友|お友達|友だち|友達)(?:さん)?)にお願いします|にお願いしたい|聞いと|きいと|依頼して|聞いて|きいて|行ける|いける|行けない|いけない|行けなく|いけなく|行けません|いけません|行かない|いかない|行かれない|行きません|いきません|送りません|迎えません|来られな|来れな|できな|できません|送れな|迎えられな|間に合わ|抜けられ|休めな|だれか|誰か|だれが|誰が|どうする|どうしよう|どうやって|どっち|どちらが|難しい|むずかしい|厳し|無理|むり|ダメ|だめ|都合が悪|連絡文|じゃない|ではない/.test(t)
   ) {
     return null;
   }
+  // 迷い・問い（「かも」「たぶん」「未定」「ですか」「かな」）は、その文だけ止める。
+  // 発言全体で止めると「明日のお迎えはパパです。少し遅れるかも」まで消えた（11/5 夜の見直し）
+  const unsure = (s: string) =>
+    /心配|ですか|ますか|でしょうか|(?<!(?:^|[、\s　])し)かも(?!め)|たぶん|多分|未定|決まってない|決まっていない/.test(s) ||
+    /(かな|かしら)[ー〜!！\s　]*$/.test(s);
   // いつのことか：その話をしている文の中の日付 → 全体の日付 → 少し前の報告の日
   // （「5日のことは言っていません。16日を全員休み」の 16日 を取る）
   const sentences = t.split(/[。\n]/).filter((x) => x.trim());
@@ -403,6 +408,7 @@ export function parseAssignment(text: string, today: string, recentDate?: string
   const allOff = /(全員|みんな|\d人とも|きょうだい)[^。\n]{0,8}(休み|欠席)/;
   const offPart = sentences.find((x) => allOff.test(x));
   if (offPart) {
+    if (unsure(offPart)) return null;
     const date = dayOf(offPart, allOff.exec(offPart)?.index ?? offPart.length);
     if (!date) return null;
     return (["送り", "迎え"] as const).map((kind) => ({ date, kind, time: null, who: null, note: "お休み" }));
@@ -410,6 +416,7 @@ export function parseAssignment(text: string, today: string, recentDate?: string
   const noneRe = /(お迎え|迎え|送り)は?[\s　、]*(なし|無し|いらない|要らない|不要|なくなり|無くなり)/;
   const nonePart = sentences.find((x) => noneRe.test(x));
   if (nonePart) {
+    if (unsure(nonePart)) return null;
     const none = noneRe.exec(nonePart)!;
     const date = dayOf(nonePart, none.index);
     if (!date) return null;
@@ -445,8 +452,9 @@ export function parseAssignment(text: string, today: string, recentDate?: string
     const name = helper ?? (who ? ROLE_WORDS[who] : "$^");
     const endsWithName = new RegExp(`(${name})(さん|ちゃん)?$`).test(tail);
     // 「お迎え パパ」「送り：ばあば」のように、送り／迎えのすぐあとに名前（行の途中でも）
-    // 名前のあとは区切りか行の終わり（「送りパパが寝坊しないか心配」は報告ではない）。「パパでした」「パパだった」も
-    const kindThenName = new RegExp(`(迎え|送り)(は|を)?[\\s　、:：]*(${name})(さん|ちゃん)?([\\s　、。！!]|で|です|だ|$)`).test(line);
+    // 名前のあとは区切りか行の終わり（「送りパパが寝坊しないか心配」は報告ではない）。「パパでした」「パパだった」も。
+    // 「パパだと思う」「パパだっけ」「パパだったら」は読まない（11/5 夜の見直し）
+    const kindThenName = new RegExp(`(迎え|送り)(は|を)?[\\s　、:：]*(${name})(さん|ちゃん)?([\\s　、。！!]|で|です|だった(?!ら|っけ)|$)`).test(line);
     // 「ばあばです」「お迎えです」「お迎えは18:30です」：名前か送り迎えの言葉のすぐあとの「です」
     const copula = new RegExp(
       `(${name}|迎え|むかえ|送り|おくり)(さん|ちゃん)?(は|が)?[\\s　]*(\\d{1,2}(:\\d{2}|時半?|時\\d{1,2}分)?)?[\\s　]*(です|でーす|だよ)`,
@@ -454,15 +462,26 @@ export function parseAssignment(text: string, today: string, recentDate?: string
     // ファミサポなど家族以外の人と送り迎えが同じ文にあれば、頼んだ報告（「ファミサポさんに一度お迎えした後は…」）
     const helperDid = helper !== null && /迎え|むかえ|送り|おくり/.test(line);
     if (!SAID.test(line) && !copula && !endsWithName && !kindThenName && !helperDid) continue;
+    if (unsure(line)) continue;
 
-    // 済んだ話（「でした」「行った」）なら、過ぎた日を来月にしない。「ばあばになりました」はこれからの話
-    const past = /でした|だった|行きました|いきました|行った|いった|行ってくれた|迎えた|送った|送りました|やりました/.test(line) && !/になりました|決まりました/.test(line);
+    // 済んだ話（文の終わりが「でした」「行った」）なら、過ぎた日を来月にしない。「ばあばになりました」はこれからの話。
+    // 文の途中の「いったん」「予定だった」「行った後」で、これからの報告を前の週にしていた（11/5 夜の見直し）
+    const past =
+      /(でした|だった|行きました|いきました|行った|いった|行ってくれた|迎えた|送った|送りました|やりました)(よ|ね|よね|わ)?[\s　!！、…〜ー]*$/.test(line) &&
+      !/になりました|決まりました/.test(line);
     const at = line.search(/迎え|むかえ|送り|おくり/);
     // 「来週から」「毎週」のように、この文が別の日のことなら、ほかの文や少し前の報告の日を当てはめない
     if (!dayNear(line, at, past) && /再来週|来週|来月|毎週|毎日|いつも|ずっと|今後|これから/.test(line)) continue;
     const date = dayOf(line, at, past);
     if (!date) continue;
-    for (const kind of kinds) found.set(`${date}|${kind}`, { date, kind, time: parseTime(line, kind), who, note: helper });
+    for (const kind of kinds) {
+      const key = `${date}|${kind}`;
+      const prev = found.get(key);
+      // 同じ枠に別の人が出たら決めつけない（「明日のお迎えはばあば。パパがお迎えだと思ってた」：11/5 夜の見直し）
+      if (prev && (prev.who !== who || prev.note !== helper)) return null;
+      // 「送り迎え」の時刻は迎えのもの。朝の送りの枠は今の時刻のまま（17:30 の送りにしない）
+      found.set(key, { date, kind, time: kinds.length > 1 && kind === "送り" ? null : parseTime(line, kind), who, note: helper });
+    }
   }
   return found.size > 0 ? [...found.values()] : null;
 }
