@@ -156,12 +156,15 @@ function noticeText(slot: Slot, who: Adult) {
   return `本日は${role}が${slot.time}に送ります。よろしくお願いします。`;
 }
 
-/** 確定の知らせ＋園の連絡アプリに貼る文。コピーは clipboard action、古い端末向けに本文にも同じ文を出す */
-export function confirmMessages(slot: Slot, who: Adult): OutMessage[] {
+/**
+ * 確定の知らせ＋園の連絡アプリに貼る文を1枚に。コピーは clipboard action、古い端末向けに本文にも同じ文を出す。
+ * ありがとうは LINE の長押しのリアクションで（吹き出しを足さない。11/6 佐藤「引き受けたあと2通来てタイムラインが荒れる」）
+ */
+export function confirmMessages(slot: Slot, who: Adult, when?: string): OutMessage[] {
   const notice = noticeText(slot, who);
   const flex: FlexMessage = {
     type: "flex",
-    altText: `${slot.place}への連絡文：${notice}`,
+    altText: `${who}に決まりました。${slot.place}への連絡文：${notice}`,
     contents: {
       type: "bubble",
       body: {
@@ -169,8 +172,11 @@ export function confirmMessages(slot: Slot, who: Adult): OutMessage[] {
         layout: "vertical",
         spacing: "md",
         contents: [
+          { type: "text", text: `✅ ${who}に決まりました。ありがとう。`, weight: "bold", size: "md", wrap: true },
+          ...(when ? [{ type: "text", text: when, size: "sm", color: "#666666", wrap: true }] : []),
           { type: "text", text: `${slot.place}への連絡文`, size: "sm", color: "#888888" },
           { type: "text", text: notice, wrap: true, size: "md" },
+          { type: "text", text: "🙏 ありがとうは、この札を長押ししてリアクションで", size: "xs", color: "#888888", wrap: true },
         ],
       },
       footer: {
@@ -187,7 +193,7 @@ export function confirmMessages(slot: Slot, who: Adult): OutMessage[] {
       },
     },
   };
-  return [{ type: "text", text: `${who}に決まりました。ありがとう。` }, flex];
+  return [flex];
 }
 
 /** 2人目が押したとき */

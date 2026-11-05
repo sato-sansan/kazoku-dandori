@@ -236,7 +236,7 @@ function adventureHtml(adv: CalendarInput["adventure"], today: string) {
   return `<section class="adv" aria-labelledby="adv-h">
 <h2 id="adv-h">${emoji} わが家の冒険 <small>${esc(s.weekLabel)}</small></h2>
 <dl class="advs">
-<dt>ありがとう</dt><dd><b>${s.thanks}</b> 回 ${esc(delta)}</dd>
+${s.thanks > 0 ? `<dt>ありがとう</dt><dd><b>${s.thanks}</b> 回 ${esc(delta)}</dd>` : ""}
 <dt>引き受けた人</dt><dd>${takes}</dd>
 ${s.finePlay ? `<dt>ファインプレー</dt><dd>${esc(s.finePlay.who)}：${esc(s.finePlay.note)}</dd>` : ""}
 ${titles ? `<dt>称号</dt><dd>${titles}</dd>` : ""}
@@ -639,7 +639,7 @@ ${noticesHtml(input.photos)}
     <li>👉「ばあばに頼んで」「@名前 にお願いして」→ その人に名指しで聞く</li>
     <li>🤒「熱で休み」→ 園・学校・習い事への文を［コピー］／［📞 電話］</li>
     <li>🌱 写真を送って「思い出に入れておいて」→ 成長記録に残る</li>
-    <li>🙏 引き受けた人に［ありがとう］→ 日曜の夜に今週のカード</li>
+    <li>🙏 ありがとうは、決まった札を長押ししてリアクションで</li>
   </ul>
 </details>
 <details class="howto">

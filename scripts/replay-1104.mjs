@@ -166,6 +166,31 @@ if (other) {
   check("ファミサポなどにした枠は、もう聞かない", !/お迎え、行ける人/.test(r.text), r.text);
 }
 
+// ⑧ 読み違いを押すだけで直す（11/6 佐藤「読み違いの直し方をもう少しスマートに」）
+r = await step("ママ", "Umama", "明後日のお迎えはパパです");
+const undo = JSON.stringify(r.messages).match(/取り消す #(\d+)/);
+check("決まった報告に［↩️ 取り消す］", !!undo, r.text);
+check("［ありがとう］の吹き出しを出さない（長押しのリアクションで）", !/ほかのみんなは/.test(r.text) && /長押し/.test(r.text), r.text);
+if (undo) {
+  r = await step("ママ", "Umama", undo[0]);
+  check("［↩️ 取り消す］で報告の前に戻す", /取り消しました/.test(r.text), r.text);
+}
+r = await step("ママ", "Umama", "明後日の送りはばあばです");
+r = await step("ママ", "Umama", "ちがう");
+check("30分以内の「ちがう」だけで取り消す", /取り消しました/.test(r.text), r.text);
+const now = new Date(Date.now() + 9 * 3600_000);
+if (now.getUTCDate() >= 3) {
+  // 月の書いていない過ぎた日は来月と読む → ［📅 今月のその日 のこと］で付け替える
+  const d = now.getUTCDate() - 2;
+  r = await step("ママ", "Umama", `${d}日のお迎えはママ`);
+  const move = JSON.stringify(r.messages).match(new RegExp(`${now.getUTCMonth() + 1}\\/${d} のこと #\\d+`));
+  check("来月と読んだ日に［📅 今月のその日 のこと］", !!move, r.text);
+  if (move) {
+    r = await step("ママ", "Umama", move[0]);
+    check("［📅 … のこと］で今月のその日に付け替える", new RegExp(`${now.getUTCMonth() + 1}/${d}（.）.*お迎えは ママ`).test(r.text), r.text);
+  }
+}
+
 // ⑥ 数字と送信数
 r = await step("パパ", "Upapa", "段取り 数字");
 check("LINE の残りが出る", /LINE の今月の残り：5通/.test(r.text), r.text);

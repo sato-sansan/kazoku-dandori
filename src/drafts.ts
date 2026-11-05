@@ -127,7 +127,7 @@ export async function draftAbsence(
 }
 
 /** 通い先はプロフィールから決める。日付が無ければ今日（書かれていない日付を Claude に作らせない） */
-function toDraft(raw: RawDraft, input: { profile: FamilyProfile; today: string }): AbsenceDraft {
+function toDraft(raw: RawDraft, input: { text: string; profile: FamilyProfile; today: string }): AbsenceDraft {
   const child = input.profile.children.find((c) => c.name === raw.child.trim());
   const attends: AbsenceDraft["attends"] =
     child?.attends === "保育所" || child?.attends === "小学校" ? child.attends : "不明";
@@ -161,6 +161,11 @@ function toDraft(raw: RawDraft, input: { profile: FamilyProfile; today: string }
     draft.school = { date, reason: raw.school_reason.trim(), note: fix(raw.school_note) };
   }
   if (raw.lesson.trim()) draft.lesson = fix(raw.lesson);
+  // 習い事の話があるのに文が空で返ったら（11/6 朝の稽古で1回）、決まった形で作る。言っていないことは足さない
+  const lesson = /スイミング|水泳|ピアノ|英語|塾|サッカー|野球|体操|ダンス|習字|書道|そろばん|バレエ|空手|柔道|剣道|習い事/.exec(input.text)?.[0];
+  if (!draft.lesson && lesson && child) {
+    draft.lesson = `${child.name}は本日、${lesson === "習い事" ? "" : lesson + "を"}お休みします。よろしくお願いします。`;
+  }
   // 組み直しは、同じ保育所に通うきょうだいが残るときだけ（「今日の保育所のお迎えは2人に」）。
   // 小学校には毎日の送迎の枠が無く、「1人分減ります」のような意味のない文になった（11/5 の稽古）
   const siblings = input.profile.children.filter((c) => c.attends === "保育所" && c.name !== child?.name).length;

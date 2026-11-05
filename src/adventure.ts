@@ -261,9 +261,8 @@ export function weeklyCard(stats: AdventureStats, reward?: string, now: number =
     stats.finePlay
       ? text(`${stats.finePlay.who} ── ${stats.finePlay.note}`, { weight: "bold", color: COLOR.accent })
       : text("今週はみんなで段取りできました", { weight: "bold", color: COLOR.accent }),
-    separator(),
-    label("ありがとう"),
-    text(thanksLine),
+    // ありがとうは LINE の長押しのリアクションになり、だんどりさんには数えられない（11/6）。数えた分があるときだけ出す
+    ...(stats.thanks > 0 ? [separator(), label("ありがとう"), text(thanksLine)] : []),
   ];
 
   // 称号は最大4つ。まず1人1つずつ（そうなった順）、空きがあれば残りを足す。数を比べる見せ方にしない

@@ -163,10 +163,9 @@ r = await say("ばあば", "Ubaaba", take?.text ?? "（ばあばのボタンが�
 check("ばあばに決まりました。ありがとう。", /ばあばに決まりました。ありがとう。/.test(r.text), r.text);
 check("保育所への連絡文＋［コピー］", /保育所への連絡文/.test(r.text) && actionsOf(r.messages).some((a) => a.type === "clipboard"), r.text);
 check("経験値の行（家族レベル）が出ない（11/5 佐藤 OK で外した）", !/家族レベル|\+\d+ ばあば/.test(r.text), r.text);
-const thanks = press(r.messages, /^ありがとう #\d+$/);
-check("［ありがとう］のボタンがある", !!thanks, r.text);
-r = await say("パパ", "Upapa", thanks?.text ?? "（ありがとうボタンが無い）");
-check("ばあばに、パパからのありがとうが届きました", /ばあばに、パパからのありがとうが届きました/.test(r.text), r.text);
+// 11/6 佐藤「引き受けたあと2通来てタイムラインが荒れる」：返事は1枚。ありがとうは LINE の長押しのリアクション（だんどりさんは受け取れない）
+check("返事は1枚（決まった・連絡文・ありがとうは長押し）", r.messages.length === 1 && /長押ししてリアクション/.test(r.text), r.text);
+check("［ありがとう］の吹き出し・ボタンを出さない", !/ほかのみんなは/.test(r.text) && !press(r.messages, /^ありがとう #\d+$/), r.text);
 r = await say("パパ", "Upapa", "段取り 念押し");
 check("（念押しの場面を戻すとき）段取り 念押し：ばあばの念押しが返信で出る", /ばあば/.test(r.text) && /お迎え/.test(r.text), r.text);
 
