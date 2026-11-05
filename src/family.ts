@@ -4,7 +4,6 @@ import {
   parseThanks,
   thanksPrompt,
   weeklyCard,
-  xpLine,
   type AdventureStats,
 } from "./adventure";
 import { renderCalendar, renderIcs } from "./calendar";
@@ -894,11 +893,14 @@ export class Family extends DurableObject<Env> {
     }
     // 全員お休み：1行にまとめ、だんどり帳にも「お休み」を出す。連絡文は頼まれたら（「都合」「連絡」と書いてあれば）すぐ作る
     const off = list.filter((a) => a.note === "お休み");
+    // 「全員」と書いてあるときだけ全員お休み。「そうた熱で休み、送り迎えなし」は送り迎えなしだけ（11/5 の見直し）
+    const everyone = off.length >= 2 && /全員|みんな|\d人とも|きょうだい/.test(text);
     const buttons: QuickButton[] = [];
     if (off.length > 0) {
       const date = off[0].date;
-      lines.unshift(`✅ ${dayLabel(date, today)}は${off.length >= 2 ? "全員お休み" : `${off[0].kind === "迎え" ? "お迎え" : "送り"}なし`}。送り迎えの「行ける人？」は聞きません。`);
-      if (off.length >= 2) {
+      const what = everyone ? "全員お休み" : off.length >= 2 ? "送り迎えなし" : `${off[0].kind === "迎え" ? "お迎え" : "送り"}なし`;
+      lines.unshift(`✅ ${dayLabel(date, today)}は${what}。送り迎えの「行ける人？」は聞きません。`);
+      if (everyone) {
         const card: Card = {
           child: "全員", kind: "欠席", title: "お休み", date, time: null, place: null, deadline: null,
           items: [], money: null, who_acts: "未定", confidence: "高", ask: null,
@@ -1286,12 +1288,9 @@ export class Family extends DurableObject<Env> {
       )
       .one();
     const familyEvent: FamilyEvent = { id: event.id, at: Date.now(), kind, who, slotId, note: describeSlot(decided, today) };
-    const stats = this.stats();
-    const messages: OutMessage[] = [
-      ...confirmMessages(decided, who),
-      { type: "text", text: xpLine(stats, kind === "急な引受" ? 20 : 10, who) },
-      thanksPrompt(familyEvent),
-    ];
+    // 経験値の1行（「+20 ばあば ありがとう！ 家族レベル2まで…」）は返事に出さない。何のレベルか分からない（11/5 佐藤 OK）。
+    // わが家の冒険（だんどり帳・日曜のカード）には残る
+    const messages: OutMessage[] = [...confirmMessages(decided, who), thanksPrompt(familyEvent)];
     await this.send(queued, messages.slice(0, 5));
     // 出る30分前に念押し（1回だけ）
     this.addReminder(slot);

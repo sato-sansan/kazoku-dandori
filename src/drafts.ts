@@ -133,8 +133,8 @@ function toDraft(raw: RawDraft, input: { profile: FamilyProfile; today: string }
     child?.attends === "保育所" || child?.attends === "小学校" ? child.attends : "不明";
   const date = raw.date && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : input.today;
 
-  const names = input.profile.children.map((c) => c.name);
-  const fix = (s: string) => fixNames(s.trim(), names);
+  // 直すのは休む子の呼び名だけ（ほかのきょうだいの名前に置き換えない）
+  const fix = (s: string) => (child ? fixNames(s.trim(), [child.name]) : s.trim());
 
   const draft: AbsenceDraft = {
     child: child?.name ?? raw.child.trim(),
@@ -143,7 +143,8 @@ function toDraft(raw: RawDraft, input: { profile: FamilyProfile; today: string }
     ask: raw.ask?.trim() || null,
   };
   // 「だれが連絡しますか」は聞かない。文を作るのに要らない（11/5 の稽古で8回に2回出た）
-  if (child && draft.ask && /どなた|だれ|誰|どちらが|パパとママ/.test(draft.ask)) draft.ask = null;
+  // 「どちらの日が休みですか」のような日の問いは残す。連絡する人の問いだけ消す（11/5 の見直し）
+  if (child && draft.ask && /連絡|伝え|送り|送る/.test(draft.ask) && /どなた|だれ|誰|どちら|パパ|ママ/.test(draft.ask)) draft.ask = null;
   if (!child && !draft.ask) {
     draft.ask = "どのお子さんのお休みですか？";
   }
@@ -188,8 +189,11 @@ export function groupAbsence(text: string, profile: FamilyProfile, today: string
   const named = profile.children.filter((c) => text.includes(c.name));
   // 「全員」は「休み」のすぐ前にあるときだけ（11/5 の見直し：「そうた熱で休み、みんなにうつらないといいけど」で4人分の文が出た）。
   // ボタンの「休みの連絡 11/16 全員」と、選んで進む「今日 全員 体調不良 休み」も全員
+  // 聞き返しへの答え「全員です」（行の頭）も全員（11/4 の「どのお子さん？」が続いた所。11/5 の見直し）
   const all =
-    /(全員|みんな|\d人とも|３人とも|きょうだい|兄弟|姉妹)[^。\n、]{0,8}(休み|欠席|休ませ)/.test(text) || /^休みの連絡\s.*全員$/.test(text.trim());
+    /(全員|みんな|\d人とも|３人とも|きょうだい|兄弟|姉妹)[^。\n]{0,8}(休み|欠席|休ませ)/.test(text) ||
+    /^休みの連絡\s.*全員$/.test(text.trim()) ||
+    /(^|\n)[\s　]*(全員|みんな|\d人とも|３人とも)(です|だよ|休み)?[\s　。！!]*($|\n)/.test(text);
   if (!all && named.length < 2) return null;
   const nurseryWord = /保育|こども園|子供園|子ども園|幼稚園|園/.test(text);
   const schoolWord = /学校|小学/.test(text);

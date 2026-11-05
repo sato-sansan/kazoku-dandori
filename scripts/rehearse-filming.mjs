@@ -160,6 +160,7 @@ const take = press(askMessages, /^お迎え引受 #\d+ ばあば$/);
 r = await say("ばあば", "Ubaaba", take?.text ?? "（ばあばのボタンが無い）");
 check("ばあばに決まりました。ありがとう。", /ばあばに決まりました。ありがとう。/.test(r.text), r.text);
 check("保育所への連絡文＋［コピー］", /保育所への連絡文/.test(r.text) && actionsOf(r.messages).some((a) => a.type === "clipboard"), r.text);
+check("経験値の行（家族レベル）が出ない（11/5 佐藤 OK で外した）", !/家族レベル|\+\d+ ばあば/.test(r.text), r.text);
 const thanks = press(r.messages, /^ありがとう #\d+$/);
 check("［ありがとう］のボタンがある", !!thanks, r.text);
 r = await say("パパ", "Upapa", thanks?.text ?? "（ありがとうボタンが無い）");
