@@ -54,9 +54,9 @@ LINE 公式アカウントは、前から持っていた空のアカウントの
 
 ## 評価（読み取りの正答率）
 - 公開の評価セット：架空のお便り15枚 `eval/public/`（誰でも同じ採点を再現できる）。`npm run eval -- --set public --tag <名前>`
-- 11/3：指示文に決まりを6つ足して **全部○ 6/15 → 15/15、でっち上げ 7件 → 0件**（決まりを8つ足した）（`docs/eval-history.md`）。この15枚は直すのに使ったもの
+- 11/3：指示文に決まりを8つ足して **全部○ 6/15 → 15/15、でっち上げ 7件 → 0件**（`docs/eval-history.md`）。この15枚は直すのに使ったもの
 - 11/5：**直すのに使っていない架空の5件**（`eval/public/heldout/`。指示文を見ていない別の係が作り、回す前に正解をコミット）で **全部○ 4/5・でっち上げ 0件**。落ちた1件は終業式の「11時30分下校」の読み落とし。この5件を見て指示文は直さない（`npm run eval -- --set heldout`）
-- 動きの試験（Claude を呼ばないものと、手元の Worker を偽の LINE に向けて流すもの）：決まった報告の言い方 `scripts/test-assignment.mjs`、11/4〜5 の家族の会話を架空の家族で流し直す `scripts/replay-1104.mjs`、撮影の台本を通しで稽古する `scripts/rehearse-filming.mjs`
+- 動きの試験（Claude を呼ばないものと、手元の Worker を偽の LINE に向けて流すもの）：決まった報告の言い方 87通り `scripts/test-assignment.mjs`、11/4〜5 の家族の会話を架空の家族で流し直す 33項目 `scripts/replay-1104.mjs`、撮影の台本を通しで稽古する 44項目 `scripts/rehearse-filming.mjs`（数は 11/6 0時の版）
 - 実物のお便りは子どもの情報を含むため非公開（`eval/private/`）。数字だけ `docs/eval-history.md` に出す
 - 採点の観点10個と回し方：Claude Code の `/eval`（`.claude/skills/eval/`）
 
