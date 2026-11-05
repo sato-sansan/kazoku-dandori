@@ -98,6 +98,8 @@ function check(name, ok, detail = "") {
 
 const ours = (l) => l.kind === "push" && l.to === group;
 const pushesBefore = lines().filter(ours).length;
+// 偽の LINE の今月の送信数を、11/5 に管理画面で見た数（21／200）にそろえる。前の試験の残りで S3 が送れなくならないように
+await fetch("http://localhost:9999/__used", { method: "POST", body: "21" });
 
 // ── S1 登場 ──────────────────────────────────────────────
 console.log(`\n=== S1 登場（グループ ${group}）`);

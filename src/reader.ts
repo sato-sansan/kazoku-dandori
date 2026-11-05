@@ -35,7 +35,9 @@ export interface ReadInput {
 }
 
 export async function readNotice(apiKey: string, input: ReadInput): Promise<ReadResult> {
-  const client = new Anthropic({ apiKey, timeout: 180_000 });
+  // 1回 120秒・やり直し1回まで。読み直し（Opus）を入れても8分で終わり、DO のアラームの時間切れで返事が消えないように
+  // （11/5 夜、API が遅い日の稽古で、遠足のお便りの返事が出ずに終わった。時間切れなら「いま読めませんでした」が返る）
+  const client = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 1 });
   const today = new Intl.DateTimeFormat("ja-JP", {
     timeZone: "Asia/Tokyo",
     dateStyle: "full",
