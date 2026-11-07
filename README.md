@@ -5,6 +5,8 @@
 
 「Built with Claude: Japan 2026」（テーマ2：本来、誰にでも届くべきものを）の作品。開発期間 2026-11-02 12:30 〜 11-08 20:00 JST に、Claude Code でこのリポジトリに新しく作っています。
 
+**デモ動画（2:45・日本語）**：https://youtu.be/7tMSup65C5s
+
 だんどりさんが何者で、なぜ双葉の生き物なのかは [docs/brand.md](docs/brand.md)。
 
 ## できること（11/3 時点。全部 LINE のグループの中で）
@@ -56,8 +58,8 @@ LINE 公式アカウントは、前から持っていた空のアカウントの
 ## 評価（読み取りの正答率）
 - 公開の評価セット：架空のお便り15枚 `eval/public/`（誰でも同じ採点を再現できる）。`npm run eval -- --set public --tag <名前>`
 - 11/3：指示文に決まりを8つ足して **全部○ 6/15 → 15/15、でっち上げ 7件 → 0件**（`docs/eval-history.md`）。この15枚は直すのに使ったもの
-- 11/5：**直すのに使っていない架空の5件**（`eval/public/heldout/`。指示文を見ていない別の係が作り、回す前に正解をコミット）で **全部○ 4/5・でっち上げ 0件**。落ちた1件は終業式の「11時30分下校」の読み落とし。この5件を見て指示文は直さない（`npm run eval -- --set heldout`）
-- 動きの試験（Claude を呼ばないものと、手元の Worker を偽の LINE に向けて流すもの）：決まった報告の言い方 87通り `scripts/test-assignment.mjs`、11/4〜5 の家族の会話を架空の家族で流し直す 33項目 `scripts/replay-1104.mjs`、撮影の台本を通しで稽古する 44項目 `scripts/rehearse-filming.mjs`（数は 11/6 0時の版）
+- 11/5：**直すのに使っていない架空の5件**（`eval/public/heldout/`。指示文を見ていない別の係が作り、回す前に正解をコミット）で **全部○ 4/5・でっち上げ 0件**。落ちた1件は終業式の「11時30分下校」の読み落とし。この5件を見て指示文は直さない（`npm run eval -- --set heldout --tag <名前>`）
+- 動きの試験（Claude を呼ばないものと、手元の Worker を偽の LINE に向けて流すもの）：決まった報告の言い方と休みの判定 110通り `scripts/test-assignment.mjs`（11/8 に回して全部 OK）、11/4〜5 の家族の会話を架空の家族で流し直す 33項目 `scripts/replay-1104.mjs`、撮影の台本を通しで稽古する 44項目 `scripts/rehearse-filming.mjs`（この2つの数は 11/6 0時の版）
 - 実物のお便りは子どもの情報を含むため非公開（`eval/private/`）。数字だけ `docs/eval-history.md` に出す
 - 採点の観点10個と回し方：Claude Code の `/eval`（`.claude/skills/eval/`）
 
