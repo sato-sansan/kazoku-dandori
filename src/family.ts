@@ -537,7 +537,7 @@ export class Family extends DurableObject<Env> {
     const teach = text.match(/^(保育所|小学校)の電話を教える$/);
     if (teach) {
       await this.send(queued, [
-        { type: "text", text: `${teach[1]}の電話番号を、このように送ってください：\n${teach[1]}の電話 0226-00-0000 9:00まで\n（「9:00まで」は、何時までに連絡するか。無くてもOK）` },
+        { type: "text", text: `${teach[1]}の電話番号を、このように送ってください：\n${teach[1]}の電話 00-0000-0000 9:00まで\n（「9:00まで」は、何時までに連絡するか。無くてもOK）` },
       ]);
       return;
     }
@@ -549,7 +549,7 @@ export class Family extends DurableObject<Env> {
       const place = /小学校|学校/.test(phone[1]) ? "小学校" : "保育所";
       const digits = phone[2].replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/[^0-9\-]/g, "");
       if (digits.replace(/-/g, "").length < 10) {
-        await this.send(queued, [{ type: "text", text: "番号が短いようです。「保育所の電話 0226-00-0000 9:00まで」のように送ってください。" }]);
+        await this.send(queued, [{ type: "text", text: "番号が短いようです。「保育所の電話 00-0000-0000 9:00まで」のように送ってください。" }]);
         return;
       }
       const by = phone[3]?.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace("：", ":");
