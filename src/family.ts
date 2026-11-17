@@ -1678,7 +1678,7 @@ export class Family extends DurableObject<Env> {
     // 古い時刻の予約は、出る時に時刻が合わないので捨てられる）
     if (this.sql.exec("SELECT 1 FROM settings WHERE key = 'reminder_v2'").toArray().length === 0) {
       for (const slot of this.sql.exec<SlotRow>("SELECT * FROM slots WHERE status = '決定' AND date > ?", today).toArray().map(toSlot)) {
-        if (this.sql.exec("SELECT 1 FROM settings WHERE key = ?", `reminded.${slot.id}`).toArray().length === 0) this.addReminder(slot);
+        if (this.sql.exec("SELECT 1 FROM settings WHERE key = ?", `reminded.${slot.id}`).toArray().length === 0) this.addReminder(slot, "移し替え");
       }
       this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('reminder_v2', ?)", String(Date.now()));
     }
@@ -1715,10 +1715,11 @@ export class Family extends DurableObject<Env> {
    * （ママの報告・だんどり帳で決めた：by が本人以外）なら、本人が知らないままにならないよう、すぐ本人の1対1に知らせる（11/17 の見直し）。
    * by を渡さない（取り消しで戻した・入れ直し）ときは知らせない
    */
-  private addReminder(slot: Pick<Slot, "id" | "date" | "time" | "who">, by?: Adult | null) {
+  /** by === "移し替え"：前から決まっていた枠の入れ直し。決めたばかりではないので、20:00 が近くても予約する */
+  private addReminder(slot: Pick<Slot, "id" | "date" | "time" | "who">, by?: Adult | null | "移し替え") {
     this.sql.exec("DELETE FROM jobs WHERE type IN ('reminder', 'notice') AND (payload = ? OR payload LIKE ?)", String(slot.id), `${slot.id}|%`);
     const due = jstToMs(addDays(slot.date, -1), REMIND_EVENING);
-    if (due - Date.now() >= REMIND_SKIP_MS) {
+    if (due - Date.now() >= REMIND_SKIP_MS || (by === "移し替え" && due > Date.now())) {
       this.addJob(due, "reminder", String(slot.id));
       return;
     }
