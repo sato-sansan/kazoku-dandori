@@ -11,9 +11,11 @@ export interface CalendarInput {
   today: string; // YYYY-MM-DD（JST）
   view: "week" | "month";
   anchor: string; // 表示の基準日 YYYY-MM-DD
-  cards: Card[]; // 予定カード（date が null のものは「日付未定」の欄にまとめる）
+  cards: (Card & { ref?: string })[]; // 予定カード（date が null のものは「日付未定」の欄にまとめる）。ref は消すときの置き場所
   slots: Slot[]; // 送迎の枠
-  photos: { date: string; url: string; label: string; kind?: string }[]; // その日の写真。kind は お便り／家族／成長。url は期限つき
+  photos: { id?: number; date: string; url: string; label: string; kind?: string }[]; // その日の写真。kind は お便り／家族／成長。url は期限つき
+  children?: string[]; // 今の子どもの呼び名（［✏️ だんどり帳を直す］の「子どもの呼び名」の欄）
+  icsUrl?: string; // Google カレンダー用の購読 URL（だんどり帳とは別の合言葉）。無ければ従来の baseUrl.ics
   adventure?: { stats: AdventureStats; takes: { who: string; count: number }[] }; // 家族の冒険（レベル・今週のありがとう・だれが何回）
   baseUrl: string; // "https://.../cal/<token>" ページ自身の URL（週↔月の切り替えリンクに使う）
   familyName?: string; // 「さとう家」など。無ければ「わが家」
@@ -160,15 +162,21 @@ function legendHtml(idx: Map<string, number>) {
   return `<div class="legend" aria-label="色の意味">${items.join("")}</div>`;
 }
 
-/** 1枚のカード（週の中身・日付未定の欄で使う）。子どもの色を左に */
-function cardHtml(card: Card, showTime: boolean, idx: Map<string, number>) {
+/** 1枚のカード（週の中身・日付未定の欄で使う）。子どもの色を左に。直しているときだけ右に［🗑］ */
+function cardHtml(card: Card & { ref?: string }, showTime: boolean, idx: Map<string, number>) {
   const time = showTime && card.time ? `<span class="t">${esc(card.time)}</span>` : "";
   const note = cardNote(card);
   const who = card.child && card.child !== "全員" ? `<i class="ci" ${childStyle(idx, card.child)}>${esc(card.child.slice(0, 1))}</i>` : `<i class="ci all">全</i>`;
-  return `<div class="ev">${who}<div class="evb">${time}<b>${esc(cardTitle(card))}</b>${note ? `<small>${esc(note)}</small>` : ""}</div></div>`;
+  const del = card.ref
+    ? `<button type="button" class="del ed-only" data-del-card="${esc(card.ref)}" data-label="${esc(cardTitle(card))}" aria-label="「${esc(cardTitle(card))}」を消す">🗑</button>`
+    : "";
+  return `<div class="ev">${who}<div class="evb">${time}<b>${esc(cardTitle(card))}</b>${note ? `<small>${esc(note)}</small>` : ""}</div>${del}</div>`;
 }
 
-/** 日ごとの送迎の担当。「朝 ママ」「夕 ばあば」。同じ種類が2つ以上ある日は「17:30 保育所 じいじ」。未定は赤＋「だれ？」 */
+/**
+ * 日ごとの送迎の担当。「朝 ママ」「夕 ばあば」。同じ種類が2つ以上ある日は「17:30 保育所 じいじ」。未定は赤＋「だれ？」。
+ * 札はボタン：［✏️ だんどり帳を直す］のときに押すと、担当を選べる（ふだんは押しても何も起きない）
+ */
 function slotChips(slots: Slot[]) {
   const sorted = [...slots].sort((a, b) => a.time.localeCompare(b.time));
   return sorted
@@ -177,13 +185,31 @@ function slotChips(slots: Slot[]) {
       const label = same > 1 ? `${s.time} ${s.place}` : s.kind === "送り" ? "朝の送り" : "お迎え";
       const who = slotWho(s);
       const nd = undecided(s);
-      return `<span class="chip${nd ? " nd" : ""}"${nd ? ' aria-label="送迎の担当がまだ決まっていません"' : ""}>${esc(label)}：${esc(who)}</span>`;
+      return `<button type="button" class="chip${nd ? " nd" : ""}" data-slot-date="${esc(s.date)}" data-slot-kind="${esc(s.kind)}" data-slot-id="${s.id}" data-slot-label="${esc(`${shortDate(s.date)} ${label}`)}"${nd ? ' aria-label="送迎の担当がまだ決まっていません"' : ""}>${esc(label)}：${esc(who)}</button>`;
+    })
+    .join("");
+}
+
+/** まだ枠の無い先の平日の「朝の送り」「お迎え」。直しているときだけ出す（押すと担当を先に決められる） */
+function ghostChips(date: string, today: string, daySlots: Slot[]) {
+  const wd = jstWeekday(date);
+  if (date < today || wd === 0 || wd === 6) return "";
+  return (["送り", "迎え"] as const)
+    .filter((k) => !daySlots.some((s) => s.kind === k))
+    .map((k) => {
+      const label = k === "送り" ? "朝の送り" : "お迎え";
+      return `<button type="button" class="chip nd ghost ed-only" data-slot-date="${esc(date)}" data-slot-kind="${k}" data-slot-label="${esc(`${shortDate(date)} ${label}`)}">${label}：未定</button>`;
     })
     .join("");
 }
 
 function photoThumb(p: Photo) {
   return `<button type="button" class="ph" data-src="${esc(p.url)}" data-label="${esc(p.label)}" aria-label="写真を大きく見る：${esc(p.label)}"><img src="${esc(p.url)}" alt="${esc(p.label)}" loading="lazy"></button>`;
+}
+
+/** 直しているときだけ出す［🗑 消す］（写真と、置き場の写真を消す） */
+function photoDel(p: Photo) {
+  return p.id === undefined ? "" : `<button type="button" class="del ed-only" data-del-photo="${p.id}" data-label="${esc(p.label)}">🗑 消す</button>`;
 }
 
 /** 残してある写真を、新しい順に一覧で。「あのお便り、どこだっけ」のための置き場 */
@@ -194,7 +220,7 @@ function noticesHtml(all: Photo[]) {
   return `<section class="notices" aria-labelledby="nt-h">
 <h2 id="nt-h">📄 お便り（${sorted.length}枚）<small>紙は捨ててOK</small></h2>
 <div class="thumbs">${sorted
-    .map((p) => `<figure class="nt">${photoThumb(p)}<figcaption>${esc(shortDate(p.date))} ${esc(p.label)}</figcaption></figure>`)
+    .map((p) => `<figure class="nt">${photoThumb(p)}<figcaption>${esc(shortDate(p.date))} ${esc(p.label)}</figcaption>${photoDel(p)}</figure>`)
     .join("")}</div>
 </section>`;
 }
@@ -210,7 +236,7 @@ function growthHtml(all: Photo[], idx: Map<string, number>) {
           .map((p) => {
             const names = p.label.split("・").filter((n) => idx.has(n));
             const chips = names.map((n) => `<i class="ci" ${childStyle(idx, n)}>${esc(n.slice(0, 1))}</i>`).join("");
-            return `<figure class="nt gr">${photoThumb(p)}<figcaption>${chips}${esc(shortDate(p.date))} ${esc(p.label)}</figcaption></figure>`;
+            return `<figure class="nt gr">${photoThumb(p)}<figcaption>${chips}${esc(shortDate(p.date))} ${esc(p.label)}</figcaption>${photoDel(p)}</figure>`;
           })
           .join("")}</div>`;
   return `<section class="notices growth" aria-labelledby="gr-h">
@@ -265,8 +291,10 @@ function dayBody(date: string, input: CalendarInput, slots: Slot[], idx: Map<str
   const daySlots = slots.filter((s) => s.date === date);
   const cards = input.cards.filter((c) => c.date === date).sort(byTime);
   const photos = input.photos.filter((p) => p.date === date);
-  if (daySlots.length === 0 && cards.length === 0 && photos.length === 0) return `<p class="none">予定なし</p>`;
-  return `${daySlots.length > 0 ? `<div class="chips">${slotChips(daySlots)}</div>` : ""}${cards.map((c) => cardHtml(c, true, idx)).join("")}${photos.length > 0 ? `<div class="thumbs">${photos.map(photoThumb).join("")}</div>` : ""}`;
+  const ghosts = ghostChips(date, input.today, daySlots);
+  const chips = daySlots.length > 0 || ghosts ? `<div class="chips${daySlots.length === 0 ? " ed-only" : ""}">${slotChips(daySlots)}${ghosts}</div>` : "";
+  if (daySlots.length === 0 && cards.length === 0 && photos.length === 0) return `${chips}<p class="none">予定なし</p>`;
+  return `${chips}${cards.map((c) => cardHtml(c, true, idx)).join("")}${photos.length > 0 ? `<div class="thumbs">${photos.map(photoThumb).join("")}</div>` : ""}`;
 }
 
 /** 月の升の中身：日付、子どもごとの頭文字（1人1つ）、送迎（未定は赤い？・決まれば担当の頭文字）、写真は 📷 */
@@ -350,6 +378,20 @@ function soonHtml(input: CalendarInput, idx: Map<string, number>) {
   const day = (date: string, word: string) =>
     `<div class="sd"><h3 class="sdh"><span class="tag">${word}</span>${esc(shortDate(date))}</h3>${dayBody(date, input, slots, idx)}</div>`;
   return `<section class="soon" id="soon" aria-label="今日と明日">${day(input.today, "今日")}${day(tomorrow, "明日")}</section>`;
+}
+
+/** 子どもの呼び名を変える欄（直しているときだけ）。変えると前に入れた予定も新しい呼び名になる */
+function namesHtml(children: string[] | undefined) {
+  if (!children || children.length === 0) return "";
+  const rows = children
+    .map((n) => `<label class="nmr"><span>${esc(n)} →</span><input type="text" maxlength="12" data-from="${esc(n)}" value="${esc(n)}" autocomplete="off"></label>`)
+    .join("");
+  return `<section class="names ed-only" aria-labelledby="nm-h">
+<h2 id="nm-h">👶 子どもの呼び名</h2>
+<p class="hint">変えると、前に入れた予定と送迎も新しい呼び名になります。前の呼び名で LINE に書いても分かります。</p>
+${rows}
+<button type="button" class="btn" id="nm-save">呼び名を保存</button>
+</section>`;
 }
 
 /** 日付が読めなかったカード。一番下にまとめる */
@@ -493,7 +535,35 @@ h2 small{font-weight:normal;color:var(--sub);font-size:.8rem;margin-left:8px}
   .mcell .ci{width:1.4rem;height:1.4rem;font-size:.85rem}
   .pk{font-size:.85rem;height:1.4rem}
 }
-@media print{.top,.howto,.hint,.back{display:none}.view,.wk{display:block}main{padding:0}}
+/* 直す（編集）：ふだんは見せない。直しているときだけ札が押せて、🗑 と呼び名の欄が出る */
+html:not(.editing) .ed-only{display:none!important}
+.editbar{display:flex;flex-direction:column;gap:6px;margin:4px 0 8px}
+.editbar .btn{width:100%}
+.editnote{margin:0;background:#FFF1C2;border:2px dashed var(--ink);border-radius:12px;padding:6px 10px;font-size:.9rem}
+button.chip{font:inherit;font-weight:bold;cursor:default}
+html.editing button.chip{cursor:pointer;border:2px dashed var(--ink)}
+.chip.ghost{background:transparent;color:var(--sub);border:2px dashed var(--sub)}
+.del{border:2px solid var(--nd);color:var(--nd);background:#fff;border-radius:10px;min-width:44px;min-height:44px;padding:2px 8px;font-weight:bold;cursor:pointer;flex-shrink:0}
+.nt .del{width:100%;margin-top:4px}
+.names{margin-top:16px;padding:12px;border:2px dashed var(--ink);border-radius:12px;background:var(--card)}
+.names h2{margin:0 0 4px}
+.nmr{display:flex;align-items:center;gap:8px;margin:6px 0}
+.nmr span{white-space:nowrap}
+.nmr input{font:inherit;min-height:44px;padding:4px 8px;border:2px solid var(--line);border-radius:8px;flex:1 1 auto;background:#fff;color:var(--ink)}
+#sheet{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:10}
+#sheet[hidden]{display:none}
+.shb{background:var(--bg);width:100%;max-width:520px;border-radius:16px 16px 0 0;padding:14px 14px 18px;display:flex;flex-direction:column;gap:8px}
+.shb h2{margin:0}
+.shb p{margin:0;color:var(--sub)}
+.shbtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.shbtns .btn.danger{background:var(--nd);border-color:var(--nd);color:#fff;grid-column:1/-1}
+.shbtns .btn.wide{grid-column:1/-1;color:var(--sub);border-color:var(--sub)}
+.rep{display:flex;align-items:center;gap:8px;min-height:44px}
+.rep[hidden]{display:none}
+.rep input{width:24px;height:24px}
+#toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 16px;border-radius:12px;z-index:11;max-width:90%;display:none;white-space:pre-line}
+#toast.on{display:block}
+@media print{.top,.howto,.hint,.back,.editbar{display:none}.view,.wk{display:block}main{padding:0}}
 `;
 
 // JS は5つ：文字の大きさ／月↔週の切り替え（前・次・今日も表示に合わせる）／月の升を押すとその週へ／週の前後は同じ月の中なら読み込みなし／写真の拡大
@@ -564,9 +634,64 @@ const JS = `
   })});
   lb.addEventListener('click',function(){lb.classList.remove('on');img.src=''});
 
-  // 最初の表示。LINE から来たとき（URL に view が無い）は月。週のリンクで来たときだけ週
+  // 直す（編集）：送迎の札を押して担当を選ぶ・🗑 で予定や写真を消す・子どもの呼び名。押すとすぐ家族のだんどり帳が変わる
+  var editBtn=document.getElementById('edit');
+  function editing(){return html.classList.contains('editing')}
+  function setEdit(on){
+    if(on){html.classList.add('editing')}else{html.classList.remove('editing')}
+    editBtn.setAttribute('aria-pressed',on?'true':'false');
+    editBtn.textContent=on?'✅ 直し終わった':'✏️ だんどり帳を直す';
+  }
+  editBtn.addEventListener('click',function(){setEdit(!editing())});
+  var sheet=document.getElementById('sheet'),shT=document.getElementById('sh-t'),shP=document.getElementById('sh-p'),shB=document.getElementById('sh-btns'),shRep=document.getElementById('sh-rep'),shW=document.getElementById('sh-weeks'),toast=document.getElementById('toast');
+  function closeSheet(){sheet.hidden=true}
+  document.getElementById('sh-cancel').addEventListener('click',closeSheet);
+  sheet.addEventListener('click',function(e){if(e.target===sheet)closeSheet()});
+  function say(t){toast.textContent=t;toast.classList.add('on');setTimeout(function(){toast.classList.remove('on')},3000)}
+  function reloadAt(anchor){
+    location.href=P.base+'?edit=1&view='+(cur==='week'?'week':'month')+'&anchor='+(anchor||(cur==='week'&&curWeek?curWeek:P.anchor));
+  }
+  function send(body,anchor){
+    shB.querySelectorAll('button').forEach(function(b){b.disabled=true});
+    fetch(P.base+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),credentials:'same-origin'})
+      .then(function(r){return r.json()})
+      .then(function(j){closeSheet();say(j.message||'');if(j.ok){setTimeout(function(){reloadAt(anchor)},1200)}})
+      .catch(function(){closeSheet();say('送れませんでした。電波のよい所で、もう一度押してください。')});
+  }
+  function openSheet(title,text,buttons,repeat){
+    shT.textContent=title;shP.textContent=text||'';shP.hidden=!text;shB.innerHTML='';
+    buttons.forEach(function(b){var el=document.createElement('button');el.type='button';el.className='btn'+(b.cls?' '+b.cls:'');el.textContent=b.label;el.addEventListener('click',b.go);shB.appendChild(el)});
+    shRep.hidden=!repeat;shW.checked=false;sheet.hidden=false;
+  }
+  document.querySelectorAll('[data-slot-date]').forEach(function(c){c.addEventListener('click',function(e){
+    if(!editing())return;
+    e.stopPropagation();
+    var d=c.dataset.slotDate,k=c.dataset.slotKind,id=c.dataset.slotId?Number(c.dataset.slotId):null;
+    function pick(w){return function(){send({action:'slot',date:d,kind:k,slotId:id,who:w,weeks:shW.checked?4:1},d)}}
+    var btns=['パパ','ママ','じいじ','ばあば'].map(function(n){return {label:n,go:pick(n)}});
+    btns.push({label:'ファミサポ',go:pick('ファミサポ')},{label:'なし（行かない）',go:pick('なし')},{label:'未定に戻す',cls:'wide',go:pick(null)});
+    openSheet(c.dataset.slotLabel+'は、だれ？','',btns,true);
+  })});
+  document.querySelectorAll('[data-del-card]').forEach(function(b){b.addEventListener('click',function(e){
+    e.stopPropagation();
+    openSheet('この予定を消しますか？','「'+b.dataset.label+'」　消すと元に戻せません',[{label:'消す',cls:'danger',go:function(){send({action:'removeCard',ref:b.dataset.delCard})}}],false);
+  })});
+  document.querySelectorAll('[data-del-photo]').forEach(function(b){b.addEventListener('click',function(e){
+    e.stopPropagation();
+    openSheet('この写真を消しますか？','「'+b.dataset.label+'」　消すと元に戻せません',[{label:'消す',cls:'danger',go:function(){send({action:'removePhoto',id:Number(b.dataset.delPhoto)})}}],false);
+  })});
+  var nmSave=document.getElementById('nm-save');
+  if(nmSave){nmSave.addEventListener('click',function(){
+    var pairs=[];
+    document.querySelectorAll('.nmr input').forEach(function(i){var t=i.value.trim();if(t&&t!==i.dataset.from){pairs.push({from:i.dataset.from,to:t})}});
+    if(!pairs.length){say('呼び名は変わっていません');return}
+    openSheet('呼び名を変えますか？',pairs.map(function(p){return p.from+' → '+p.to}).join('、'),[{label:'変える',cls:'danger',go:function(){send({action:'rename',pairs:pairs})}}],false);
+  })}
+
+  // 最初の表示。LINE から来たとき（URL に view が無い）は月。週のリンクで来たときだけ週。直したあとの読み直しは直す画面のまま
   var q=new URLSearchParams(location.search);
   if(q.get('view')==='week'){showWeek(P.anchorWeek,P.anchor)}else{showMonth()}
+  if(q.get('edit')==='1'){setEdit(true)}
 })();
 `;
 
@@ -577,7 +702,7 @@ const HEAD_JS = `try{var f=localStorage.getItem('dandori-fs');if(f==='s'||f==='l
 export function renderCalendar(raw: CalendarInput): string {
   const input = { ...raw, cards: normCards(raw.cards) };
   const family = input.familyName || "わが家";
-  const icsUrl = `${input.baseUrl}.ics`;
+  const icsUrl = input.icsUrl ?? `${input.baseUrl}.ics`;
   const idx = childIndex(input);
   const { month, weekSec, first } = monthAndWeeks(input, idx);
   const monthOn = input.view !== "week";
@@ -623,6 +748,10 @@ export function renderCalendar(raw: CalendarInput): string {
   ${legendHtml(idx)}
 </header>
 <main>
+<div class="editbar">
+  <button type="button" class="btn" id="edit" aria-pressed="false">✏️ だんどり帳を直す</button>
+  <p class="editnote ed-only">直しています。送迎の札を押すと担当を選べます（先の日は、日にちを押して週を出す）。🗑 で予定・写真を消せます。子どもの呼び名は一番下。押すと、すぐ家族のだんどり帳が変わります。</p>
+</div>
 ${soonHtml(input, idx)}
 ${month}
 ${weekSec}
@@ -630,6 +759,7 @@ ${undatedHtml(input.cards, idx)}
 ${adventureHtml(input.adventure, input.today)}
 ${growthHtml(input.photos, idx)}
 ${noticesHtml(input.photos)}
+${namesHtml(input.children)}
 <details class="howto">
   <summary>だんどりさんへの頼み方（家族の LINE で）</summary>
   <ul>
@@ -637,6 +767,8 @@ ${noticesHtml(input.photos)}
     <li>🚗「明日のお迎え だれか」→ 家族の名前ボタン。先に押した人に決まる</li>
     <li>🙋「5日の朝の送り 難しい」→ だんどりさんが家族に聞き直す</li>
     <li>👉「ばあばに頼んで」「@名前 にお願いして」→ その人に名指しで聞く</li>
+    <li>📆「来週の月水金のお迎えはばあば、火木はパパ」「来週のお迎え 行ける人？」→ まとめて入れる・聞く</li>
+    <li>✏️ このページの［だんどり帳を直す］→ 先の送り迎えの担当を選ぶ・予定や写真を消す・子どもの呼び名を変える</li>
     <li>🤒「熱で休み」→ 園・学校・習い事への文を［コピー］／［📞 電話］</li>
     <li>🌱 写真を送って「思い出に入れておいて」→ 成長記録に残る</li>
     <li>🙏 ありがとうは、決まった札を長押ししてリアクションで</li>
@@ -649,10 +781,18 @@ ${noticesHtml(input.photos)}
     <li>Googleカレンダーの「他のカレンダー」＋ →「URL で追加」に貼る</li>
   </ol>
   <code>${esc(icsUrl)}</code>
-  <p>このだんどり帳の URL は家族だけに。合言葉の代わりなので、ほかの人に送らないでください。</p>
+  <p>このだんどり帳の URL は家族だけに。合言葉の代わりで、予定を直すこともできるので、ほかの人に送らないでください（上の Google カレンダー用の URL は見るだけ）。</p>
 </details>
 </main>
 <div id="lb" role="dialog" aria-label="写真"><button type="button" class="btn close" aria-label="閉じる">閉じる</button><img alt=""><p></p></div>
+<div id="sheet" role="dialog" aria-modal="true" aria-labelledby="sh-t" hidden><div class="shb">
+  <h2 id="sh-t"></h2>
+  <p id="sh-p"></p>
+  <div id="sh-btns" class="shbtns"></div>
+  <label id="sh-rep" class="rep"><input type="checkbox" id="sh-weeks">同じ曜日を4週ぶん、同じにする</label>
+  <button type="button" class="btn" id="sh-cancel">やめる</button>
+</div></div>
+<div id="toast" role="status" aria-live="polite"></div>
 <script>window.__cal=${JSON.stringify(params).replace(/</g, "\\u003c")};</script>
 <script>${JS}</script>
 </body>

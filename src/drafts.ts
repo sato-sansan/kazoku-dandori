@@ -3,7 +3,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { FlexMessage, OutMessage } from "./line";
-import type { FamilyProfile } from "./profile";
+import { aliasNote, childByWord, childrenInText, withCurrentName, type FamilyProfile } from "./profile";
 
 // 整えの仕事なので安いモデル。Haiku には fallbacks を付けない
 const DRAFT_MODEL = "claude-haiku-5-5";
@@ -107,8 +107,11 @@ export async function draftAbsence(
   const context = [
     `今日：${input.today}（${weekday}）`,
     `<family>${JSON.stringify(input.profile)}</family>`,
+    aliasNote(input.profile),
     `<message>${input.text}</message>`,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const response = await client.beta.messages.create({
     model: DRAFT_MODEL,
@@ -128,13 +131,14 @@ export async function draftAbsence(
 
 /** 通い先はプロフィールから決める。日付が無ければ今日（書かれていない日付を Claude に作らせない） */
 function toDraft(raw: RawDraft, input: { text: string; profile: FamilyProfile; today: string }): AbsenceDraft {
-  const child = input.profile.children.find((c) => c.name === raw.child.trim());
+  const name = childByWord(input.profile, raw.child);
+  const child = name ? input.profile.children.find((c) => c.name === name) : undefined;
   const attends: AbsenceDraft["attends"] =
     child?.attends === "保育所" || child?.attends === "小学校" ? child.attends : "不明";
   const date = raw.date && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : input.today;
 
   // 直すのは休む子の呼び名だけ（ほかのきょうだいの名前に置き換えない）
-  const fix = (s: string) => (child ? fixNames(s.trim(), [child.name]) : s.trim());
+  const fix = (s: string) => (child ? withCurrentName(fixNames(s.trim(), [child.name]), child) : s.trim());
 
   const draft: AbsenceDraft = {
     child: child?.name ?? raw.child.trim(),
@@ -194,7 +198,7 @@ export function fixNames(text: string, names: string[]): string {
  * 1人の子の名前だけなら null（ふつうの下書きへ）。学校が振替休日・休校なら学校への連絡は作らない
  */
 export function groupAbsence(text: string, profile: FamilyProfile, today: string, date: string): AbsenceDraft[] | null {
-  const named = profile.children.filter((c) => text.includes(c.name));
+  const named = childrenInText(profile, text);
   // 「全員」は「休み」のすぐ前にあるときだけ（11/5 の見直し：「そうた熱で休み、みんなにうつらないといいけど」で4人分の文が出た）。
   // ボタンの「休みの連絡 11/16 全員」と、選んで進む「今日 全員 体調不良 休み」も全員
   // 聞き返しへの答え「全員です」（行の頭）も全員（11/4 の「どのお子さん？」が続いた所。11/5 の見直し）

@@ -72,7 +72,8 @@ export async function classifyIntent(
   const weekday = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", weekday: "short" }).format(
     new Date(`${input.today}T12:00:00+09:00`),
   );
-  const children = input.profile.children.map((c) => c.name).join("・");
+  // 呼び名を変えた子は前の呼び名もかっこで（前の呼び名で書かれても子どもの名前と分かるように）
+  const children = input.profile.children.map((c) => (c.aliases?.length ? `${c.name}（${c.aliases.join("・")}）` : c.name)).join("・");
   const response = await client.beta.messages.create({
     model: INTENT_MODEL,
     max_tokens: 2000,

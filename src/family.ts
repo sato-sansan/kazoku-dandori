@@ -44,14 +44,15 @@ import {
   parseAssignment,
   parseDay,
   parseDecline,
+  parseBulk,
   parseRequest,
-  reminderMessage,
+  reminderBundle,
   ROLE_WORDS,
   slotsFromCards,
   undecidedMessage,
   type Assignment,
 } from "./pickup";
-import { loadProfile, type FamilyProfile } from "./profile";
+import { applyChildNames, childByWord, childrenInText, loadProfile, type FamilyProfile } from "./profile";
 import { readNotice, type ReadInput } from "./reader";
 import { addDays, jstDate, jstTime, jstToMs, jstWeekday, nextSundayEvening, weekRange } from "./time";
 import { ADULTS, type Adult, type FamilyEvent, type Slot } from "./types";
@@ -60,7 +61,14 @@ import { ADULTS, type Adult, type FamilyEvent, type Slot } from "./types";
 const SEEN_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
 const ASK_EVENING = "19:00";
 const ASK_MORNING = "07:00";
-const REMIND_BEFORE_MS = 30 * 60 * 1000;
+/**
+ * 担当の人へのお知らせは前の晩 20:00 に1回（11/17 佐藤「送迎の通知は30分前では意味がない」。30分前では代わりを頼めない）。
+ * その日の分を1通にまとめる。お知らせの3時間以内に決めた枠（19:00 の聞き取りで押した等）は、決めたばかりなので出さない
+ */
+const REMIND_EVENING = "20:00";
+const REMIND_SKIP_MS = 3 * 60 * 60 * 1000;
+/** まだ決まっていない枠は、3時間前にグループへ（朝 7:00 の聞き直しと近い朝の枠は、聞き直しが兼ねる） */
+const UNDECIDED_BEFORE_MS = 3 * 60 * 60 * 1000;
 /** 定時のお知らせは、今月の送信数がこれだけ残るところで止める（家族が頼んだときのぶん。4人なら3回） */
 const PUSH_RESERVE = 12;
 
@@ -92,6 +100,7 @@ const HOW_TO = `だんどりさんへの頼み方
 🚗「明日のお迎え だれか」→ 家族の名前ボタン
 🙋「5日の朝の送り 難しい」→ 家族に聞き直します
 👉「ばあばに頼んで」→ その人に名指しで聞きます
+📆「来週の月水金のお迎えはばあば、火木はパパ」「来週のお迎え 行ける人？」→ まとめて入れる・聞く
 🌱 写真＋「思い出に入れておいて」→ 成長記録に
 📅「予定 見せて」→ わが家のだんどり帳（月・週・今日と明日）
 🙏 ありがとうは、決まった札を長押ししてリアクションで
@@ -133,7 +142,7 @@ interface EventRow extends Record<string, SqlStorageValue> {
   note: string | null;
 }
 
-type JobType = "ask_evening" | "ask_morning" | "reminder" | "weekly_card";
+type JobType = "ask_evening" | "ask_morning" | "reminder" | "undecided" | "notice" | "weekly_card";
 
 /** 決まった報告の控え。［↩️ 取り消す］で、報告の前の枠と引き受けの記録に戻す（11/6 佐藤「読み違いの直し方をスマートに」） */
 interface UndoRecord {
@@ -479,6 +488,40 @@ export class Family extends DurableObject<Env> {
   }
 
   /**
+   * まとめて「行ける人？」（「来週のお迎え、行ける人いる？」）。何日ぶんかの札を1通にまとめて（横にめくる）出す。
+   * もう決まっている日は札を出さずに1行で。土日は毎日の枠が無いので、枠のある日だけ。頼んだ人のボタンは出さない
+   */
+  private async bulkAsk(queued: QueuedEvent, items: { date: string; kind: Slot["kind"]; time: string | null }[], today: string) {
+    const role = this.roleOf(queued.event.source.userId);
+    const bubbles: Record<string, unknown>[] = [];
+    const decided: string[] = [];
+    for (const it of items) {
+      // もうある枠はそのまま使う（決まっていない枠の時刻を 17:30 に戻さない）。土日は毎日の枠が無いので、枠のある日だけ
+      const existing = this.slotsOf([it.date]).filter((s) => s.kind === it.kind && s.status !== "取消");
+      const slot =
+        existing.find((s) => s.place === "保育所") ??
+        existing[0] ??
+        (isWeekend(it.date) ? null : this.findOrCreateSlot(it.date, it.time ?? (it.kind === "迎え" ? "17:30" : "07:30"), it.kind, queued.event.source.type === "user" ? "1対1" : "グループ"));
+      if (!slot) continue;
+      if (slot.status === "決定" || slot.status === "不要") {
+        decided.push(`${dayLabel(slot.date, today)}は${slot.who ?? slot.note ?? "なし"}`);
+        continue;
+      }
+      // 「お願い中」にはしない：だれも押さなかった日は、その前の晩 19:00（と朝 7:00）にもう一度聞く
+      bubbles.push(askMessage(slot, { exclude: role ?? undefined }).contents);
+    }
+    const already = decided.length > 0 ? `決まっている日：${decided.join("、")}` : "";
+    if (bubbles.length === 0) {
+      await this.send(queued, [{ type: "text", text: already || "聞ける日がありませんでした（土日は保育所の送り迎えがありません）。" }]);
+      return;
+    }
+    const carousel: OutMessage = { type: "flex", altText: `まとめて${bubbles.length}件、行ける人？`, contents: { type: "carousel", contents: bubbles } };
+    const head = `まとめて聞きます（${bubbles.length}件）。行ける日のボタンを押してください。札は横にめくれます。${already ? `\n${already}` : ""}`;
+    console.log(JSON.stringify({ step: "bulk_ask", n: bubbles.length }));
+    await this.askGroup(queued, [{ type: "text", text: head }, carousel]);
+  }
+
+  /**
    * routed：聞き分け（Claude）から、決まった言い方に直して戻ってきた一言。もう一度聞き分けには回さない（回り続けないため）
    */
   private async handleText(queued: QueuedEvent, rawText: string, routed = false) {
@@ -557,6 +600,29 @@ export class Family extends DurableObject<Env> {
       await this.send(queued, [
         { type: "text", text: `${place}の電話を覚えました：${digits}${by ? `（${by}までに）` : ""}。休みの連絡に［電話をかける］が付きます。` },
       ]);
+      return;
+    }
+    // 子どもの呼び名を変える：「子どもの名前 前→今 前→今」（secret は触らない。家族ごとの箱に覚える）
+    const rename = /^子(?:ども|供)の(?:呼び)?名前[\s　]*[:：]?([\s\S]*)$/.exec(text);
+    if (rename) {
+      const pairs = rename[1]
+        // 「ゆい → ゆいか」のように矢印の前後に空白があっても1組に
+        .replace(/[\s　]*(→|⇒|->|＞|>|=|＝)[\s　]*/g, "$1")
+        .split(/[\s　、,，\n]+/)
+        .map((t) => /^(.+?)(?:→|⇒|->|＞|>|=|＝)(.+)$/.exec(t) ?? /^(.+?)を(.+?)に$/.exec(t))
+        .filter((m): m is RegExpExecArray => m !== null)
+        .map((m) => ({ from: m[1], to: m[2] }));
+      const names = this.profile().children.map((c) => c.name).join("・");
+      if (pairs.length === 0) {
+        await this.send(queued, [{ type: "text", text: `今の呼び名：${names}\n変えるときは、このように送ってください：\n子どもの名前 前の呼び名→新しい呼び名` }]);
+        return;
+      }
+      const { done, errors } = this.renameChildren(pairs);
+      const lines = [
+        ...(done.length > 0 ? [`✅ 子どもの呼び名を変えました：${done.map((d) => `${d.from}→${d.to}`).join("、")}`, "だんどり帳の予定と送迎も、新しい呼び名にしました。前の呼び名で書いても分かります。"] : []),
+        ...errors,
+      ];
+      await this.send(queued, [{ type: "text", text: lines.join("\n") || `呼び名は変わっていません（今の呼び名：${names}）` }]);
       return;
     }
     // ホーム画面を作り直す（画像や入口を変えたとき）
@@ -675,7 +741,7 @@ export class Family extends DurableObject<Env> {
                   type: "button",
                   style: "secondary",
                   height: "sm",
-                  action: { type: "clipboard", label: "Googleカレンダー用URLをコピー", clipboardText: `${base}.ics` },
+                  action: { type: "clipboard", label: "Googleカレンダー用URLをコピー", clipboardText: `https://kazoku-dandori.dandori.workers.dev/i/${await this.icsToken(queued.familyId)}.ics` },
                 },
               ],
             },
@@ -704,8 +770,14 @@ export class Family extends DurableObject<Env> {
       const now = jstTime();
       // ファミサポ・お休み（不要）の枠には念押しを出さない（11/5 の見直し）
       const next = this.slotsOf([today, addDays(today, 1)]).find((s) => s.status !== "取消" && s.status !== "不要" && (s.date > today || s.time >= now));
+      // 決まった枠は、前の晩 20:00 に担当の人へ届くのと同じ1通（その人のその日の分をまとめたもの）
+      const bundle = next?.status === "決定" && next.who ? this.slotsOf([next.date]).filter((s) => s.status === "決定" && s.who === next.who) : [];
       await this.send(queued, [
-        next ? (next.status === "決定" ? reminderMessage(next) : undecidedMessage(next)) : { type: "text", text: "これからの送り迎えはありません。" },
+        next
+          ? next.status === "決定" && next.who
+            ? reminderBundle(next.who, bundle, today)
+            : undecidedMessage(next)
+          : { type: "text", text: "これからの送り迎えはありません。" },
       ]);
       return;
     }
@@ -723,6 +795,18 @@ export class Family extends DurableObject<Env> {
 
     // 決まった報告：「明日5時迎えばーばになりました」「28日土曜お迎え パパ」「5日はファミサポにお迎え頼みました」「16日は全員お休み」
     // 確認の問いにせず、その日の枠にすぐ入れて1行で返す（11/4：報告が読み取りに回り、確認の問いが10往復した）
+    // まとめての頼み（11/17 佐藤）：「来週の月水金のお迎えはばあば、火木はパパ」「来週のお迎え、行ける人いる？」。
+    // 2日以上の話だけ。1日だけの話は下の決まった報告・頼みの道へ
+    const bulk = parseBulk(text, today);
+    if (bulk?.mode === "assign") {
+      await this.applyAssignment(queued, bulk.list, today, text, { bulk: true, weekly: bulk.weekly });
+      return;
+    }
+    if (bulk?.mode === "ask") {
+      await this.bulkAsk(queued, bulk.items, today);
+      return;
+    }
+
     const assigned = parseAssignment(text, today, this.recentAssignDate());
     if (assigned) {
       await this.applyAssignment(queued, assigned, today, text);
@@ -883,8 +967,11 @@ export class Family extends DurableObject<Env> {
    * 決まった報告を枠に入れて、短く返す。家族のだれかなら「決定」（引き受けとして数え、［ありがとう］と念押し）、
    * ファミサポ・お休みなら「不要」（19:00 の「行ける人？」も念押しも出さない）
    */
-  private async applyAssignment(queued: QueuedEvent, list: Assignment[], today: string, text: string) {
-    const lines: string[] = [];
+  private async applyAssignment(queued: QueuedEvent, list: Assignment[], today: string, text: string, opts: { bulk?: boolean; weekly?: boolean } = {}) {
+    const by = this.roleOf(queued.event.source.userId);
+    let lines: string[] = [];
+    // まとめての報告（3件以上）は、担当ごとに1行にまとめて返す（「✅ お迎え ばあば：11/23（月）・11/25（水）」）
+    const entries: { date: string; kind: Assignment["kind"]; label: string; before: string | null }[] = [];
     const extra: OutMessage[] = [];
     // 取り消し用の控え：変える前の枠と、その枠の引き受けの記録（［↩️ 取り消す］で、この報告の前の形に戻す）
     const undo: UndoRecord = { at: Date.now(), text, list, items: [], batchId: null, moveTo: null };
@@ -901,7 +988,8 @@ export class Family extends DurableObject<Env> {
       // 済んだ日の話（「4日のお迎えはママでした」）は記録の直し。ありがとうの促しも念押しも出さない
       const done = a.date < today;
       // 「N日」が過ぎていて来月と読んだとき（日付に月が書いていない）。今月のその日（済んだ日）に付け替えるボタンを出す
-      const nextMonth = !done && a.date > addDays(today, 20) && !/月|\//.test(text);
+      // まとめての報告（毎週など）は日付を数えて決めているので、来月と読む直しは出さない（11/17 の見直し：毎週の報告に［📅 今月のこと］が出た）
+      const nextMonth = !opts.bulk && !done && a.date > addDays(today, 20) && !/月|\//.test(text);
       if (nextMonth && `${today.slice(0, 8)}${a.date.slice(8, 10)}` < today) moveTo = `${today.slice(0, 8)}${a.date.slice(8, 10)}`;
       if (a.who) {
         const same = slot.status === "決定" && slot.who === a.who && slot.time === time;
@@ -911,36 +999,59 @@ export class Family extends DurableObject<Env> {
         const decided: Slot = { ...slot, time, who: a.who, status: "決定", note: undefined };
         const said = describeSlot(decided, today);
         lines.push(`✅ ${said}は ${a.who}${before ? `（${before}から直しました）` : ""}。`);
+        entries.push({ date: slot.date, kind: slot.kind, label: a.who, before });
         if (nextMonth) lines.push(`（月が書いていないので、来月の${Number(a.date.slice(8, 10))}日にしました）`);
         if (same) continue;
         const kind = slot.date === today ? "急な引受" : "引受";
+        // 先の日（明後日より先）の引き受けは、その日の時刻で数える（まとめての報告で、何週も先の分を今週に数えない）
+        const at = slot.date > addDays(today, 1) ? Math.max(Date.now(), jstToMs(slot.date, time)) : Date.now();
         const prev = before
           ? this.sql
               .exec<{ id: number }>("SELECT id FROM events WHERE slot_id = ? AND kind IN ('引受', '急な引受') ORDER BY id DESC LIMIT 1", slot.id)
               .toArray()[0]
           : undefined;
         if (prev) this.sql.exec("UPDATE events SET who = ?, note = ? WHERE id = ?", a.who, said, prev.id);
-        else this.sql.exec("INSERT INTO events (at, kind, who, slot_id, note) VALUES (?, ?, ?, ?, ?)", Date.now(), kind, a.who, slot.id, said);
+        else this.sql.exec("INSERT INTO events (at, kind, who, slot_id, note) VALUES (?, ?, ?, ?, ?)", at, kind, a.who, slot.id, said);
         if (done) continue;
         // ありがとうは LINE の長押しのリアクションで（［ありがとう］の吹き出しを足さない。11/6 佐藤「タイムラインが荒れる」）
         thanksHint = true;
         // 担当が変わったら念押しはやり直し（1回だけ）
         this.sql.exec("DELETE FROM settings WHERE key = ?", `reminded.${slot.id}`);
-        this.addReminder(decided);
+        this.addReminder(decided, by);
       } else {
         this.sql.exec("UPDATE slots SET time = ?, who = NULL, status = '不要', note = ? WHERE id = ?", time, a.note, slot.id);
         this.sql.exec("DELETE FROM jobs WHERE type = 'reminder' AND (payload = ? OR payload LIKE ?)", String(slot.id), `${slot.id}|%`);
         // 家族のだれかが引き受けていた枠なら、その引き受けは無かったことに（行っていない人の数を増やさない）
         this.sql.exec("DELETE FROM events WHERE slot_id = ? AND kind IN ('引受', '急な引受')", slot.id);
         if (a.note !== "お休み") lines.push(`✅ ${describeSlot({ ...slot, time }, today, a.time !== null)}は ${a.note}。家族に「行ける人？」は聞きません。`);
+        entries.push({ date: slot.date, kind: slot.kind, label: a.note ?? "なし", before: null });
       }
+    }
+    if (opts.bulk) {
+      const groups = new Map<string, string[]>();
+      for (const e of entries) {
+        const key = `${e.kind}|${e.label}`;
+        groups.set(key, [...(groups.get(key) ?? []), dayLabel(e.date, today)]);
+      }
+      const fixed = entries.filter((e) => e.before).map((e) => dayLabel(e.date, today));
+      lines = [
+        ...[...groups].map(([key, days]) => {
+          const [kind, label] = key.split("|");
+          const family = (ADULTS as string[]).includes(label);
+          return `✅ ${kind === "迎え" ? "お迎え" : "送り"} ${label}：${[...new Set(days)].join("・")}${family ? "" : "（家族に「行ける人？」は聞きません）"}`;
+        }),
+        ...(fixed.length > 0 ? [`（${[...new Set(fixed)].join("・")}は、前の担当から直しました）`] : []),
+        ...(opts.weekly ? ["（毎週の分は、4週先まで入れました）"] : []),
+        "都合が悪い日は「11/25のお迎え 無理」のように送ってください。",
+      ];
     }
     // 全員お休み：1行にまとめ、だんどり帳にも「お休み」を出す。連絡文は頼まれたら（「都合」「連絡」と書いてあれば）すぐ作る
     const off = list.filter((a) => a.note === "お休み");
     // 「全員」と書いてあるときだけ全員お休み。「そうた熱で休み、送り迎えなし」は送り迎えなしだけ（11/5 の見直し）
     const everyone = off.length >= 2 && /全員|みんな|\d人とも|きょうだい/.test(text);
     const buttons: QuickButton[] = [];
-    if (off.length > 0) {
+    // 何日ぶんものお休み（まとめての報告）は、上の担当ごとの1行で返す
+    if (off.length > 0 && !opts.bulk) {
       const date = off[0].date;
       const what = everyone ? "全員お休み" : off.length >= 2 ? "送り迎えなし" : `${off[0].kind === "迎え" ? "お迎え" : "送り"}なし`;
       lines.unshift(`✅ ${dayLabel(date, today)}は${what}。送り迎えの「行ける人？」は聞きません。`);
@@ -1162,9 +1273,10 @@ export class Family extends DurableObject<Env> {
           .toArray()[0]
       : undefined;
 
+    const profile = this.profile();
     const result = await readNotice(this.env.ANTHROPIC_API_KEY, {
       ...input,
-      profile: this.profile(),
+      profile,
       previousCards: awaiting ? (JSON.parse(awaiting.cards) as Card[]) : undefined,
     });
     // 何を読んだかは記録しない。形だけ残す（件数・自信・聞き返しの有無）
@@ -1197,7 +1309,8 @@ export class Family extends DurableObject<Env> {
     const cards = result.cards.map((card) => {
       const keep = !!asked && !kept && card.ask === asked;
       if (keep) kept = true;
-      return { ...card, ask: keep ? card.ask : null, source };
+      // 前の呼び名で読んだカードも、今の呼び名に（だんどり帳で同じ子が2人に分かれないように）
+      return { ...card, child: childByWord(profile, card.child) ?? card.child, ask: keep ? card.ask : null, source };
     });
     const question = asked;
     const batch = this.sql
@@ -1274,7 +1387,7 @@ export class Family extends DurableObject<Env> {
   /** 「この写真 残して」「思い出に入れておいて」：直前の写真を家族の写真として残す */
   private async keepRecentPhoto(queued: QueuedEvent, text: string) {
     // 文に出てくる子どもの呼び名で「だれの成長記録か」を決める。名前が無ければ家族の写真（思い出）
-    const names = this.profile().children.map((c) => c.name).filter((n) => text.includes(n));
+    const names = childrenInText(this.profile(), text).map((c) => c.name);
     const growth = names.length > 0 || /成長記録/.test(text);
     const label = names.length > 0 ? names.join("・") : growth ? "成長記録" : /思い出|アルバム/.test(text) ? "思い出" : "家族の写真";
     const recent = this.sql
@@ -1384,8 +1497,8 @@ export class Family extends DurableObject<Env> {
     // 返事は1枚：決まった・園への連絡文［コピー］・ありがとうは長押しのリアクションで（11/6 佐藤「引き受けたあと2通来てタイムラインが荒れる」）。
     // 経験値の1行（11/5 佐藤 OK で外した）も［ありがとう］の吹き出しも出さない
     await this.send(queued, confirmMessages(decided, who, describeSlot(decided, today)));
-    // 出る30分前に念押し（1回だけ）
-    this.addReminder(slot);
+    // 前の晩 20:00 に担当の人へ（1回だけ）。押したのが本人でなく、もう前の晩を過ぎていたら、すぐ本人に知らせる
+    this.addReminder(decided, this.roleOf(queued.event.source.userId));
   }
 
   private async thank(queued: QueuedEvent, eventId: number, userId?: string) {
@@ -1438,10 +1551,14 @@ export class Family extends DurableObject<Env> {
     // 印と予約を先に済ませる。送れなくても、朝の聞き直しと念押しは残る
     for (const slot of open) this.sql.exec("UPDATE slots SET status = 'お願い中', requested_by = COALESCE(requested_by, '自動') WHERE id = ?", slot.id);
     if (!retry && open.length > 0) this.addJob(jstToMs(date, ASK_MORNING), "ask_morning", date);
-    // 朝 7:00 の聞き直しと同じころに「まだ決まっていません」を重ねない（7:30 の送りは 7:00 の聞き直しが念押しを兼ねる）
+    // 決まらなかったときの「まだ決まっていません」は3時間前。朝 7:00 の聞き直しと近い枠には重ねない（朝の送りは聞き直しが兼ねる）
     const morning = jstToMs(date, ASK_MORNING);
     for (const slot of open) {
-      if (jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS > morning + 45 * 60 * 1000) this.addReminder(slot);
+      const at = jstToMs(slot.date, slot.time) - UNDECIDED_BEFORE_MS;
+      if (at > morning + 45 * 60 * 1000) {
+        this.sql.exec("DELETE FROM jobs WHERE type = 'undecided' AND (payload = ? OR payload LIKE ?)", String(slot.id), `${slot.id}|%`);
+        this.addJob(at, "undecided", String(slot.id));
+      }
     }
     // 1回で送るのは5通まで（送迎4枠＋持ち物でちょうど）
     const messages: OutMessage[] = [...open.map((slot) => askMessage(slot, { retry })), ...(items ? [items] : [])].slice(0, 5);
@@ -1557,6 +1674,14 @@ export class Family extends DurableObject<Env> {
     // 翌日が土日でも、お便り由来の枠があるかもしれないので予約はする（askForDate 側で毎日の枠だけ省く）
     this.addJob(at, "ask_evening", target);
     this.addJob(nextSundayEvening(), "weekly_card", "");
+    // 11/17：担当の人へのお知らせを30分前から前の晩 20:00 に変えた。前から決まっていた先の枠にも、新しい時刻で予約を入れ直す（1回だけ。
+    // 古い時刻の予約は、出る時に時刻が合わないので捨てられる）
+    if (this.sql.exec("SELECT 1 FROM settings WHERE key = 'reminder_v2'").toArray().length === 0) {
+      for (const slot of this.sql.exec<SlotRow>("SELECT * FROM slots WHERE status = '決定' AND date > ?", today).toArray().map(toSlot)) {
+        if (this.sql.exec("SELECT 1 FROM settings WHERE key = ?", `reminded.${slot.id}`).toArray().length === 0) this.addReminder(slot);
+      }
+      this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('reminder_v2', ?)", String(Date.now()));
+    }
   }
 
   private addJob(dueAt: number, type: JobType, payload: string) {
@@ -1584,10 +1709,20 @@ export class Family extends DurableObject<Env> {
     }
   }
 
-  /** 念押しの予約。同じ枠の古い予約は消す（枠の時刻が変わると古い時刻の予約が残り、念押しが2回出た：11/4） */
-  private addReminder(slot: Pick<Slot, "id" | "date" | "time">) {
-    this.sql.exec("DELETE FROM jobs WHERE type = 'reminder' AND (payload = ? OR payload LIKE ?)", String(slot.id), `${slot.id}|%`);
-    this.addJob(jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS, "reminder", String(slot.id));
+  /**
+   * 担当の人へのお知らせの予約（前の晩 20:00）。同じ枠の古い予約は消す（枠の時刻が変わると古い予約が残り、2回出た：11/4）。
+   * お知らせまで3時間ない（いま決めたばかり・もう前の晩を過ぎた）なら前の晩には出さない。ただし決めたのが担当の本人でない
+   * （ママの報告・だんどり帳で決めた：by が本人以外）なら、本人が知らないままにならないよう、すぐ本人の1対1に知らせる（11/17 の見直し）。
+   * by を渡さない（取り消しで戻した・入れ直し）ときは知らせない
+   */
+  private addReminder(slot: Pick<Slot, "id" | "date" | "time" | "who">, by?: Adult | null) {
+    this.sql.exec("DELETE FROM jobs WHERE type IN ('reminder', 'notice') AND (payload = ? OR payload LIKE ?)", String(slot.id), `${slot.id}|%`);
+    const due = jstToMs(addDays(slot.date, -1), REMIND_EVENING);
+    if (due - Date.now() >= REMIND_SKIP_MS) {
+      this.addJob(due, "reminder", String(slot.id));
+      return;
+    }
+    if (by !== undefined && by !== slot.who && jstToMs(slot.date, slot.time) > Date.now()) this.addJob(Date.now() + 1000, "notice", String(slot.id));
   }
 
   /** dueAt は予約した時刻（やり直しのときは null） */
@@ -1599,19 +1734,34 @@ export class Family extends DurableObject<Env> {
     else if (type === "ask_morning") await this.askForDate(payload, true);
     else if (type === "reminder") {
       const slot = this.slotById(Number(payload));
-      if (!slot || slot.status === "取消" || slot.status === "不要") return;
-      // 念押しは1枠1回（佐藤 11/4「事前通知は1回で良い」）。今の時刻とずれた古い予約は捨てる
+      // 前の晩のお知らせは、決まった枠の担当の人だけ（1枠1回：佐藤 11/4「事前通知は1回で良い」）
+      if (!slot || slot.status !== "決定" || !slot.who) return;
       const key = `reminded.${slot.id}`;
       if (this.sql.exec("SELECT 1 FROM settings WHERE key = ?", key).toArray().length > 0) return;
-      if (dueAt !== null && Math.abs(dueAt - (jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS)) > 5 * 60 * 1000) return;
-      // 決まっていない朝の枠は、7:00 の聞き直しが念押しを兼ねる（前からある予約でも同じ分に2通出さない）
-      if (slot.status !== "決定" && jstToMs(slot.date, slot.time) - REMIND_BEFORE_MS <= jstToMs(slot.date, ASK_MORNING) + 45 * 60 * 1000) return;
-      this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", key, String(Date.now()));
-      if (slot.status === "決定" && slot.who) {
-        // 念押しは担当の人だけに（グループ全員に送ると人数ぶん数える）。届かなくてもグループには送らない
-        for (const id of this.userIdsOf(slot.who)) await this.pushTo(id, [reminderMessage(slot)], true);
-        return;
+      // 枠の日が変わった古い予約は捨てる
+      if (dueAt !== null && Math.abs(dueAt - jstToMs(addDays(slot.date, -1), REMIND_EVENING)) > 5 * 60 * 1000) return;
+      // 同じ人の同じ日の枠（朝の送りとお迎え）は1通にまとめる。まとめた枠の予約は消す
+      const mine = this.slotsOf([slot.date]).filter(
+        (s) => s.status === "決定" && s.who === slot.who && this.sql.exec("SELECT 1 FROM settings WHERE key = ?", `reminded.${s.id}`).toArray().length === 0,
+      );
+      for (const s of mine) {
+        this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", `reminded.${s.id}`, String(Date.now()));
+        if (s.id !== slot.id) this.sql.exec("DELETE FROM jobs WHERE type = 'reminder' AND (payload = ? OR payload LIKE ?)", String(s.id), `${s.id}|%`);
       }
+      // 担当の人の1対1だけに（グループ全員に送ると人数ぶん数える）。届かなくてもグループには送らない
+      for (const id of this.userIdsOf(slot.who)) await this.pushTo(id, [reminderBundle(slot.who, mine, jstDate())], true);
+    } else if (type === "notice") {
+      // 本人以外が前の晩を過ぎてから決めた枠：本人の1対1に、その枠だけをすぐ1通
+      const slot = this.slotById(Number(payload));
+      if (!slot || slot.status !== "決定" || !slot.who || jstToMs(slot.date, slot.time) <= Date.now()) return;
+      const key = `reminded.${slot.id}`;
+      if (this.sql.exec("SELECT 1 FROM settings WHERE key = ?", key).toArray().length > 0) return;
+      this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", key, String(Date.now()));
+      for (const id of this.userIdsOf(slot.who)) await this.pushTo(id, [reminderBundle(slot.who, [slot], jstDate())], true);
+    } else if (type === "undecided") {
+      const slot = this.slotById(Number(payload));
+      if (!slot || slot.status === "決定" || slot.status === "取消" || slot.status === "不要") return;
+      if (dueAt !== null && Math.abs(dueAt - (jstToMs(slot.date, slot.time) - UNDECIDED_BEFORE_MS)) > 5 * 60 * 1000) return;
       // まだ決まっていない：グループに。今日のぶんが無ければ、その時刻まで次の返信に相乗り
       const msg = [undecidedMessage(slot)];
       if (!(await this.pushToGroup(msg, true))) this.defer(msg, `undecided:${slot.id}`, jstToMs(slot.date, slot.time));
@@ -1715,8 +1865,9 @@ export class Family extends DurableObject<Env> {
       ]);
       return true;
     }
-    if (row.step === "absence.child" && profile.children.some((c) => c.name === text)) {
-      set("absence.reason", { child: text });
+    const picked = row.step === "absence.child" ? childByWord(profile, text) : null;
+    if (picked) {
+      set("absence.reason", { child: picked });
       await this.send(queued, [
         withButtons("理由は？", [
           { label: "熱", text: "熱" },
@@ -1764,6 +1915,21 @@ export class Family extends DurableObject<Env> {
     return token;
   }
 
+  /**
+   * Google カレンダー用の購読 URL の合言葉。だんどり帳の合言葉とは別（11/17：だんどり帳で予定を直せるようにしたので、
+   * カレンダーに貼る URL から直す画面に入れないように）。台帳には "i:" を付けて置き、だんどり帳の合言葉としては引けない
+   */
+  private async icsToken(familyId: string) {
+    const row = this.sql.exec("SELECT value FROM settings WHERE key = 'ics_token'").toArray()[0];
+    if (row && (row.value as string).length === 10) return row.value as string;
+    const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+    const bytes = crypto.getRandomValues(new Uint8Array(10));
+    const token = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+    this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('ics_token', ?)", token);
+    await this.env.DIRECTORY.get(this.env.DIRECTORY.idFromName("directory")).registerToken(`i:${token}`, familyId);
+    return token;
+  }
+
   /** 家族ごとのホーム画面（リッチメニュー）。なければ作って、名簿の人の1対1のトークに結びつける。rebuild なら作り直す */
   private async giveRichMenu(familyId: string, userIds: string[], rebuild = false) {
     const token = this.env.LINE_CHANNEL_ACCESS_TOKEN;
@@ -1792,16 +1958,20 @@ export class Family extends DurableObject<Env> {
 
   async calendarPage(baseUrl: string, view: "week" | "month", anchor?: string) {
     const today = jstDate();
+    const familyId = this.familyId();
+    const origin = new URL(baseUrl).origin;
     return renderCalendar({
+      icsUrl: familyId ? `${origin}/i/${await this.icsToken(familyId)}.ics` : undefined,
       today,
       view,
       anchor: anchor && /^\d{4}-\d{2}-\d{2}$/.test(anchor) ? anchor : today,
-      cards: this.okCards(),
+      cards: this.okCardsWithRef().map(({ card, ref }) => ({ ...card, ref })),
       slots: this.allSlots(),
       photos: this.sql
         .exec<{ id: number; date: string; label: string; kind: string }>("SELECT id, date, label, kind FROM photos ORDER BY date")
         .toArray()
-        .map((row) => ({ date: row.date, label: row.label, kind: row.kind, url: `${baseUrl}/photo/${row.id}` })),
+        .map((row) => ({ id: row.id, date: row.date, label: row.label, kind: row.kind, url: `${baseUrl}/photo/${row.id}` })),
+      children: this.profile().children.map((c) => c.name),
       adventure: this.adventureForPage(),
       baseUrl,
     });
@@ -1809,6 +1979,130 @@ export class Family extends DurableObject<Env> {
 
   async calendarIcs() {
     return renderIcs({ cards: this.okCards(), slots: this.allSlots() });
+  }
+
+  /**
+   * だんどり帳の編集（合言葉つき URL の［✏️ 編集］から）。LINE には何も送らない。
+   *  slot：先の送り迎えの担当を決める（11/17 佐藤「カレンダーから、未来が決まっているものを選択できるように」）。weeks で同じ曜日を何週か
+   *  removeCard / removePhoto：入れたお便りの予定・写真を消す（11/17 佐藤「入力したプリントなどのデータを消せるように」）
+   *  rename：子どもの呼び名を変える
+   * 中身はページから来るので、ここで形を確かめる
+   */
+  async pageAction(body: Record<string, unknown>): Promise<{ ok: boolean; message: string }> {
+    const today = jstDate();
+    const str = (v: unknown) => (typeof v === "string" ? v : "");
+    if (body.action === "slot") {
+      const date = str(body.date);
+      const kind = body.kind === "送り" || body.kind === "迎え" ? body.kind : null;
+      const choice = body.who === null ? null : str(body.who);
+      const valid = choice === null || (ADULTS as string[]).includes(choice) || choice === "ファミサポ" || choice === "なし";
+      // 「2026-13-01」のような無い日付は断る（toISOString は無い日付で例外になる）
+      const ms = /^\d{4}-\d{2}-\d{2}$/.test(date) ? Date.parse(`${date}T00:00:00Z`) : NaN;
+      const real = !Number.isNaN(ms) && new Date(ms).toISOString().slice(0, 10) === date;
+      if (!real || !kind || !valid) return { ok: false, message: "うまく受け取れませんでした。もう一度押してください。" };
+      if (date < today) return { ok: false, message: "過ぎた日は変えられません。" };
+      const weeks = Math.min(Math.max(Math.trunc(Number(body.weeks) || 1), 1), 8);
+      // 押した札（習い事・通院の枠もある）。無ければ保育所の毎日の枠。2週目からは同じ場所の枠
+      const picked = typeof body.slotId === "number" ? this.slotById(body.slotId) : null;
+      const place = picked && picked.date === date && picked.kind === kind && picked.status !== "取消" ? picked.place : "保育所";
+      let changed = 0;
+      for (let k = 0; k < weeks; k++) {
+        const day = addDays(date, 7 * k);
+        const same = this.slotsOf([day]).find((s) => s.kind === kind && s.place === place && s.status !== "取消");
+        // 毎日の枠が無い日（土日）・保育所でない場所は、もうある枠だけ
+        if (!same && (place !== "保育所" || isWeekend(day))) continue;
+        this.setSlotFromPage(same ?? this.findOrCreateSlot(day, kind === "迎え" ? "17:30" : "07:30", kind, "カレンダー"), choice as Adult | "ファミサポ" | "なし" | null, today);
+        changed++;
+      }
+      const what = choice === null ? "未定に戻しました" : choice === "なし" ? "「なし」にしました（家族に聞きません）" : `${choice}にしました`;
+      return { ok: changed > 0, message: changed > 0 ? `${dayLabel(date, today)}の${kind === "迎え" ? "お迎え" : "送り"}を${what}${changed > 1 ? `（${changed}週ぶん）` : ""}` : "変えられる日がありませんでした。" };
+    }
+    if (body.action === "removeCard") return this.removeCard(str(body.ref), today);
+    if (body.action === "removePhoto") return this.removePhoto(Number(body.id));
+    if (body.action === "rename") {
+      const pairs = (Array.isArray(body.pairs) ? body.pairs : [])
+        .slice(0, 12)
+        .map((p) => ({ from: str((p as Record<string, unknown>)?.from), to: str((p as Record<string, unknown>)?.to).trim() }))
+        .filter((p) => p.from && p.to && p.from !== p.to);
+      if (pairs.length === 0) return { ok: true, message: "呼び名は変わっていません。" };
+      const { done, errors } = this.renameChildren(pairs);
+      return {
+        ok: errors.length === 0,
+        message: [...(done.length > 0 ? [`呼び名を変えました：${done.map((d) => `${d.from}→${d.to}`).join("、")}`] : []), ...errors].join("\n"),
+      };
+    }
+    return { ok: false, message: "分からない操作です。" };
+  }
+
+  /**
+   * だんどり帳から担当を決める・家族以外（ファミサポ）・なし・未定に戻す。決まった報告（applyAssignment）と同じ記録の付け方。
+   * 引き受けの記録の時刻は、先の日ならその日の時刻（今週の「引き受けた人」に、何週も先の分をまとめて数えない）
+   */
+  private setSlotFromPage(slot: Slot, choice: Adult | "ファミサポ" | "なし" | null, today: string) {
+    const dropReminder = () => {
+      this.sql.exec("DELETE FROM jobs WHERE type = 'reminder' AND (payload = ? OR payload LIKE ?)", String(slot.id), `${slot.id}|%`);
+      this.sql.exec("DELETE FROM settings WHERE key = ?", `reminded.${slot.id}`);
+    };
+    if (choice === null || choice === "ファミサポ" || choice === "なし") {
+      this.sql.exec(
+        "UPDATE slots SET who = NULL, status = ?, note = ? WHERE id = ?",
+        choice === null ? "未定" : "不要",
+        choice,
+        slot.id,
+      );
+      // 行かない人の引き受けは無かったことに（数を盛らない）
+      this.sql.exec("DELETE FROM events WHERE slot_id = ? AND kind IN ('引受', '急な引受')", slot.id);
+      dropReminder();
+      return;
+    }
+    if (slot.status === "決定" && slot.who === choice) return;
+    const before = slot.status === "決定" && slot.who ? slot.who : null;
+    this.sql.exec("UPDATE slots SET who = ?, status = '決定', note = NULL WHERE id = ?", choice, slot.id);
+    const decided: Slot = { ...slot, who: choice, status: "決定", note: undefined };
+    const said = describeSlot(decided, today);
+    const prev = before
+      ? this.sql.exec<{ id: number }>("SELECT id FROM events WHERE slot_id = ? AND kind IN ('引受', '急な引受') ORDER BY id DESC LIMIT 1", slot.id).toArray()[0]
+      : undefined;
+    const at = Math.max(Date.now(), jstToMs(slot.date, slot.time));
+    if (prev) this.sql.exec("UPDATE events SET who = ?, note = ? WHERE id = ?", choice, said, prev.id);
+    else this.sql.exec("INSERT INTO events (at, kind, who, slot_id, note) VALUES (?, '引受', ?, ?, ?)", at, choice, slot.id, said);
+    dropReminder();
+    // だんどり帳ではだれが決めたか分からない。前の晩を過ぎていたら、本人にすぐ知らせる
+    this.addReminder(decided, null);
+  }
+
+  /** だんどり帳で予定を1枚消す（束の中で removed を付ける。全部消えたら束ごと）。その予定から作った、まだ決まっていない送迎の枠も取り消す */
+  private removeCard(ref: string, today: string): { ok: boolean; message: string } {
+    const m = /^(\d+):(\d+)$/.exec(ref);
+    const row = m ? this.sql.exec<Batch & { status: string }>("SELECT id, cards, status FROM batches WHERE id = ?", Number(m[1])).toArray()[0] : undefined;
+    const cards = row ? (JSON.parse(row.cards) as (Card & { removed?: boolean })[]) : [];
+    const i = m ? Number(m[2]) : -1;
+    const card = cards[i];
+    if (!row || row.status !== "ok" || !card || card.removed) return { ok: false, message: "もう消えています。" };
+    cards[i] = { ...card, removed: true };
+    this.sql.exec("UPDATE batches SET cards = ?, status = ? WHERE id = ?", JSON.stringify(cards), cards.every((c) => c.removed) ? "removed" : "ok", row.id);
+    // お便りの送迎・習い事から作った枠で、まだだれも決めていない先の枠は取り消す（19:00 に聞かない）。毎日の保育所の枠は残す
+    if (card.date && card.date >= today) {
+      for (const shape of slotsFromCards([card], card.date)) {
+        const s = this.slotsOf([card.date]).find(
+          (x) => x.kind === shape.kind && x.place === shape.place && x.time === shape.time && (x.status === "未定" || x.status === "お願い中"),
+        );
+        if (s && !(s.place === "保育所" && !isWeekend(card.date))) this.sql.exec("UPDATE slots SET status = '取消' WHERE id = ?", s.id);
+      }
+    }
+    const title = card.child && card.child !== "全員" ? `${card.child} ${card.title}` : card.title;
+    return { ok: true, message: `「${title}」を消しました。` };
+  }
+
+  /** だんどり帳で写真を1枚消す（置き場の写真も消す） */
+  private async removePhoto(id: number): Promise<{ ok: boolean; message: string }> {
+    const row = Number.isInteger(id) ? this.sql.exec<{ key: string; label: string }>("SELECT key, label FROM photos WHERE id = ?", id).toArray()[0] : undefined;
+    if (!row) return { ok: false, message: "もう消えています。" };
+    // 置き場の写真を消せたときだけ一覧からも消す（置き場に写真だけ残らないように）
+    const gone = await this.env.PHOTOS.delete(row.key).then(() => true, () => false);
+    if (!gone) return { ok: false, message: "いま消せませんでした。少し待って、もう一度押してください。" };
+    this.sql.exec("DELETE FROM photos WHERE id = ?", id);
+    return { ok: true, message: `写真「${row.label}」を消しました。` };
   }
 
   private allSlots(): Slot[] {
@@ -1820,7 +2114,9 @@ export class Family extends DurableObject<Env> {
   /** 家族の呼び名と学年。撮影用のグループで「架空の家族で」と言うと、見本の4人（はると・ゆい・そうた・めい）になる */
   private profile(): FamilyProfile {
     const row = this.sql.exec("SELECT value FROM settings WHERE key = 'profile'").toArray()[0];
-    const base = loadProfile(row?.value === "sample" ? undefined : this.env.FAMILY_PROFILE);
+    const sample = row?.value === "sample";
+    // 家族が変えた呼び名（「子どもの名前 前→今」・だんどり帳）。secret は書き換えずに、家族ごとの箱の設定で上書きする。見本の家族には当てない
+    const base = sample ? loadProfile(undefined) : applyChildNames(loadProfile(this.env.FAMILY_PROFILE), this.childNames(), this.childAliases());
     // 園・学校の電話は LINE で「保育所の電話 0120-…  9:00まで」と教えてもらい、家族ごとの箱に置く（secret を触らずに済む）
     const contacts = { ...base.contacts };
     for (const r of this.sql.exec<{ key: string; value: string }>("SELECT key, value FROM settings WHERE key LIKE 'contact.%'").toArray()) {
@@ -1830,6 +2126,90 @@ export class Family extends DurableObject<Env> {
     return { ...base, contacts };
   }
 
+  /** 家族が変えた呼び名（secret の呼び名 → 今の呼び名） */
+  private childNames(): Record<string, string> {
+    const row = this.sql.exec<{ value: string }>("SELECT value FROM settings WHERE key = 'child_names'").toArray()[0];
+    return row ? (JSON.parse(row.value) as Record<string, string>) : {};
+  }
+
+  /** 途中の呼び名（secret の呼び名 → 2回目からの変更の前の呼び名たち） */
+  private childAliases(): Record<string, string[]> {
+    const row = this.sql.exec<{ value: string }>("SELECT value FROM settings WHERE key = 'child_aliases'").toArray()[0];
+    return row ? (JSON.parse(row.value) as Record<string, string[]>) : {};
+  }
+
+  /**
+   * 子どもの呼び名を変える（前の呼び名 → 今の呼び名）。前に読んだ予定・送迎の枠・成長記録の名前も今の呼び名に直す。
+   * 前の呼び名は profile の aliases に残るので、家族が前の呼び名で書いても同じ子として読む。
+   * 返すのは変えた組と、変えられなかった理由（どの子か分からない・ほかの子と同じ名前 など）
+   */
+  renameChildren(pairs: { from: string; to: string }[]): { done: { from: string; to: string }[]; errors: string[] } {
+    const done: { from: string; to: string }[] = [];
+    const errors: string[] = [];
+    if (this.sql.exec("SELECT value FROM settings WHERE key = 'profile'").toArray()[0]?.value === "sample") {
+      return { done, errors: ["見本の家族の呼び名は変えられません"] };
+    }
+    const secret = loadProfile(this.env.FAMILY_PROFILE);
+    const names = this.childNames();
+    for (const { from, to } of pairs) {
+      const now = this.profile();
+      const current = childByWord(now, from);
+      const next = to.trim();
+      if (!current) {
+        errors.push(`「${from}」はどの子か分かりませんでした（今の呼び名：${now.children.map((c) => c.name).join("・")}）`);
+        continue;
+      }
+      // 「・」は成長記録の名前の区切りに使うので入れない
+      if (!next || next.length > 12 || /[\s　、。,・]/.test(next) || (ADULTS as readonly string[]).includes(next) || next === "全員") {
+        errors.push(`「${to}」は呼び名にできません（12字まで・空白と「・」なし）`);
+        continue;
+      }
+      if (next === current) continue;
+      // ほかの子の呼び名と同じ・どちらかがどちらかを含む（「はる」と「はると」）と、文の中でどの子か分からなくなる
+      const others = now.children.filter((c) => c.name !== current).flatMap((c) => [c.name, ...(c.aliases ?? [])]);
+      if (others.some((o) => o === next || o.includes(next) || next.includes(o))) {
+        errors.push(`「${next}」はほかの子の呼び名と重なります`);
+        continue;
+      }
+      // secret の呼び名を鍵に覚える（2回目の変更「前→今→次」でも、元の子に結びつく）。途中の呼び名も覚えておく
+      const original = secret.children.find((c) => (names[c.name] ?? c.name) === current)?.name ?? current;
+      if (names[original] && names[original] !== next) {
+        const history = this.childAliases();
+        history[original] = [...new Set([...(history[original] ?? []), names[original]])];
+        this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('child_aliases', ?)", JSON.stringify(history));
+      }
+      names[original] = next;
+      this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('child_names', ?)", JSON.stringify(names));
+      this.replaceChildName(current, next);
+      done.push({ from: current, to: next });
+    }
+    return { done, errors };
+  }
+
+  /** 保存してある予定・送迎の枠・写真の名前・進行中の会話の中の呼び名を、前 → 今に直す */
+  private replaceChildName(from: string, to: string) {
+    for (const b of this.sql.exec<{ id: number; cards: string }>("SELECT id, cards FROM batches").toArray()) {
+      const cards = JSON.parse(b.cards) as Card[];
+      if (!cards.some((c) => c.child === from)) continue;
+      this.sql.exec("UPDATE batches SET cards = ? WHERE id = ?", JSON.stringify(cards.map((c) => (c.child === from ? { ...c, child: to } : c))), b.id);
+    }
+    for (const s of this.sql.exec<{ id: number; children: string }>("SELECT id, children FROM slots").toArray()) {
+      const children = JSON.parse(s.children) as string[];
+      if (!children.includes(from)) continue;
+      this.sql.exec("UPDATE slots SET children = ? WHERE id = ?", JSON.stringify(children.map((n) => (n === from ? to : n))), s.id);
+    }
+    for (const p of this.sql.exec<{ id: number; label: string }>("SELECT id, label FROM photos").toArray()) {
+      const parts = p.label.split("・");
+      if (!parts.includes(from)) continue;
+      this.sql.exec("UPDATE photos SET label = ? WHERE id = ?", parts.map((n) => (n === from ? to : n)).join("・"), p.id);
+    }
+    for (const f of this.sql.exec<{ user_id: string; data: string }>("SELECT user_id, data FROM flows").toArray()) {
+      const data = JSON.parse(f.data) as Record<string, unknown>;
+      if (data.child !== from) continue;
+      this.sql.exec("UPDATE flows SET data = ? WHERE user_id = ?", JSON.stringify({ ...data, child: to }), f.user_id);
+    }
+  }
+
   private roleOf(userId?: string): Adult | null {
     if (!userId) return null;
     const row = this.sql.exec("SELECT role FROM members WHERE user_id = ?", userId).toArray()[0];
@@ -1837,10 +2217,19 @@ export class Family extends DurableObject<Env> {
   }
 
   private okCards(): Card[] {
+    return this.okCardsWithRef().map((x) => x.card);
+  }
+
+  /** 入れた予定と、その置き場所（"束の番号:何枚目"）。だんどり帳で消した予定（removed）は出さない */
+  private okCardsWithRef(): { card: Card; ref: string }[] {
     return this.sql
       .exec<Batch>("SELECT id, cards FROM batches WHERE status = 'ok'")
       .toArray()
-      .flatMap((row) => JSON.parse(row.cards) as Card[]);
+      .flatMap((row) =>
+        (JSON.parse(row.cards) as (Card & { removed?: boolean })[])
+          .map((card, i) => ({ card, ref: `${row.id}:${i}` }))
+          .filter((x) => !x.card.removed),
+      );
   }
 
   /** 同じ日・同じ種類・同じ場所の枠は1つにまとめる。決まっている枠は上書きしない */

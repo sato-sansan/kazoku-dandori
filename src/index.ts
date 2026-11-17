@@ -8,7 +8,41 @@ export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
 
-    // 家族のカレンダー。長い合言葉を知っている人だけ。ログインはない
+    // だんどり帳の編集（送迎の担当・予定や写真を消す・呼び名）。合言葉を知っている人だけ。
+    // ほかのサイトからは送らせない：Origin が違えば断り、JSON だけ受ける（よそのページからの JSON の送信は、事前の確認で止まる）
+    const edit = /^\/c\/([a-z0-9]{10})\/edit$/.exec(url.pathname);
+    if (edit) {
+      if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+      const origin = request.headers.get("Origin");
+      if ((origin && origin !== url.origin) || !(request.headers.get("Content-Type") ?? "").startsWith("application/json")) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      const familyId = await env.DIRECTORY.get(env.DIRECTORY.idFromName("directory")).familyOfToken(edit[1]);
+      if (!familyId) return new Response("Not Found", { status: 404 });
+      const raw = await request.text();
+      let body: unknown = null;
+      try {
+        body = raw.length <= 10_000 ? JSON.parse(raw) : null;
+      } catch {
+        body = null;
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) return new Response("Bad Request", { status: 400 });
+      const result = await env.FAMILY.get(env.FAMILY.idFromName(familyId)).pageAction(body as Record<string, unknown>);
+      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    // Google カレンダー用の購読（見るだけ）。だんどり帳とは別の合言葉（台帳では "i:" つき）
+    const feed = /^\/i\/([a-z0-9]{10})\.ics$/.exec(url.pathname);
+    if (feed && request.method === "GET") {
+      const familyId = await env.DIRECTORY.get(env.DIRECTORY.idFromName("directory")).familyOfToken(`i:${feed[1]}`);
+      if (!familyId) return new Response("Not Found", { status: 404 });
+      return new Response(await env.FAMILY.get(env.FAMILY.idFromName(familyId)).calendarIcs(), {
+        headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex", "Content-Type": "text/calendar; charset=utf-8" },
+      });
+    }
+
+    // 家族のカレンダー。長い合言葉を知っている人だけ。ログインはない。
+    // 前に配った /c/<合言葉>.ics もそのまま見られる（もう貼ってある Google カレンダーを止めない）
     const cal = /^\/c\/([a-z0-9]{10})(\.ics|\/photo\/(\d+))?$/.exec(url.pathname);
     if (cal && request.method === "GET") {
       const familyId = await env.DIRECTORY.get(env.DIRECTORY.idFromName("directory")).familyOfToken(cal[1]);

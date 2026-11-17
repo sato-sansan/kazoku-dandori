@@ -229,12 +229,18 @@ export function itemsMessage(cards: Card[], date: string): TextMessage | null {
   return { type: "text", text: [`🎒 ${shortDate(date)}の持ち物・集金`, ...lines.slice(0, 8)].join("\n") };
 }
 
-export function reminderMessage(slot: Slot): TextMessage {
-  const head = slot.who ? `${slot.who}、` : "";
-  return { type: "text", text: `${head}${slot.time} ${whose(slot)}の${kindWord(slot.kind)}です。よろしくお願いします。` };
+/**
+ * 前の晩のお知らせ：担当の人に、明日の自分の送り迎えを1通で（送りとお迎えの両方なら1通にまとめる）。
+ * 「パパ、明日 11/18（水）は 7:30 保育所3人の送り・17:30 保育所3人のお迎えです。よろしくお願いします。」
+ */
+export function reminderBundle(who: string, slots: Slot[], today: string): TextMessage {
+  const sorted = [...slots].sort((a, b) => a.time.localeCompare(b.time));
+  const day = sorted[0].date === addDays(today, 1) ? `明日 ${shortDate(sorted[0].date)}` : sorted[0].date === today ? "今日" : shortDate(sorted[0].date);
+  const list = sorted.map((s) => `${s.time} ${whose(s)}の${kindWord(s.kind)}`).join("・");
+  return { type: "text", text: `${who}、${day}は ${list}です。よろしくお願いします。` };
 }
 
-/** 朝7:00まで決まらなかったとき。だれにも振らない（勝手に決めない） */
+/** まだ決まっていない枠を、その日の昼に知らせる。だれにも振らない（勝手に決めない） */
 export function undecidedMessage(slot: Slot): TextMessage {
   return { type: "text", text: `${slot.time} ${whose(slot)}の${kindWord(slot.kind)}、まだ決まっていません。` };
 }
@@ -353,6 +359,9 @@ export interface Assignment {
   note: string | null;
 }
 
+/** 決まった報告ではない言い方（頼み・問いかけ・断り・連絡文の頼み）。発言のどこにあっても報告として読まない。まとめての頼み（parseBulk）も同じものを使う */
+export const NOT_A_REPORT = /[?？]|頼んで|たのんで|頼んど|たのんど|頼める|頼みたい|お願いして|お願いしと|お願いでき|(?<!(?:ファミサポ|ファミリーサポート|ファミリー・サポート|シッター|ママ友|お友達|友だち|友達)(?:さん)?)にお願いします|にお願いしたい|聞いと|きいと|依頼して|聞いて|きいて|行ける|いける|行けない|いけない|行けなく|いけなく|行けません|いけません|行かない|いかない|行かれない|行きません|いきません|送りません|迎えません|来られな|来れな|できな|できません|送れな|迎えられな|間に合わ|抜けられ|休めな|だれか|誰か|だれが|誰が|どうする|どうしよう|どうやって|どっち|どちらが|難しい|むずかしい|厳し|無理|むり|ダメ|だめ|都合が悪|連絡文|じゃない|ではない/;
+
 /**
  * 「5時迎え」は 17:00。お迎えで 1〜7時は午後とみなす（「朝」「午前」と書いてあれば別）。
  * 「11時」「10時半」の早いお迎えはそのまま。「1時間」は時刻ではない（11/5 の見直し：11時が 23:00 になった）
@@ -380,9 +389,7 @@ export function parseAssignment(text: string, today: string, recentDate?: string
   const t = toHalfWidth(text).trim();
   // 頼み・問いかけ・断り・連絡文の頼みは別の道（名前ボタン・聞き直し・休みの連絡）。発言のどこにあっても止める
   // 11/5 の見直しで足した：「行けなくなりました」「ばあばにお願いします」。ファミサポなど家族以外に「お願いします」は頼んだ報告
-  if (
-    /[?？]|頼んで|たのんで|頼んど|たのんど|頼める|頼みたい|お願いして|お願いしと|お願いでき|(?<!(?:ファミサポ|ファミリーサポート|ファミリー・サポート|シッター|ママ友|お友達|友だち|友達)(?:さん)?)にお願いします|にお願いしたい|聞いと|きいと|依頼して|聞いて|きいて|行ける|いける|行けない|いけない|行けなく|いけなく|行けません|いけません|行かない|いかない|行かれない|行きません|いきません|送りません|迎えません|来られな|来れな|できな|できません|送れな|迎えられな|間に合わ|抜けられ|休めな|だれか|誰か|だれが|誰が|どうする|どうしよう|どうやって|どっち|どちらが|難しい|むずかしい|厳し|無理|むり|ダメ|だめ|都合が悪|連絡文|じゃない|ではない/.test(t)
-  ) {
+  if (NOT_A_REPORT.test(t)) {
     return null;
   }
   // 迷い・問い（「かも」「たぶん」「未定」「ですか」「かな」）は、その文だけ止める。
@@ -538,3 +545,259 @@ askMessage の出力例（17:30 の迎え、exclude なし）:
   }
 }
 */
+
+// ── まとめての頼み（11/17 佐藤「まとめての依頼をグループで連絡した時に対応できるように」） ──
+// 「来週の月水金のお迎えはばあば、火木はパパ」「18日〜22日の送りはパパ」「毎週水曜のお迎えはばあば」
+// 「来週のお迎え、行ける人いる？」を、何日ぶんかまとめて読む。1日だけの話は parseAssignment（ここでは読まない）。
+// 分からない所が1つでもあれば何も入れない（全部読めたときだけ。読み違いで決めつけない）
+
+/** その週の月曜（today を含む週を 0、来週を 1） */
+function mondayOfWeek(today: string, offset: number) {
+  return addDays(today, -((weekdayOf(today) + 6) % 7) + 7 * offset);
+}
+
+function weekdayOf(date: string) {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+const WEEK_WORD: Record<string, number> = { 今週: 0, 来週: 1, 再来週: 2 };
+const D = "\\d{1,2}[/月]\\d{1,2}日?|\\d{1,2}日";
+/** 日付のすぐあとの曜日（「28日土曜」「11/5(木)」）。日付とひとまとまりに読む */
+const WDS = "(?:[（(][月火水木金土日][)）]|[月火水木金土日]曜日?)?";
+const SEP = "(?:〜|～|~|－|-|から)";
+const Q = "(?:(今週|来週|再来週|毎週)の?)?";
+/** 「明日」「今日」「毎日」「休日」の「日」を日曜と読まない（「明日水曜のお迎え」が明日と日曜の2日になった：11/17 の見直し） */
+const NB = "(?<![\\d今明昨後毎平休祝本翌前])";
+const REL = "今日|きょう|明後日|あさって|明日|あした";
+const SPEC = new RegExp(
+  [
+    `(?<range>(?:${D}|\\d{1,2})${WDS}\\s*${SEP}\\s*(?:${D})${WDS}(?:まで)?)`,
+    `(?<list>\\d{1,2}日?${WDS}(?:\\s*[・、,，と]\\s*\\d{1,2}日?${WDS})+)`,
+    `(?<date>(?:${D})${WDS})`,
+    // 「明日と明後日」のように並んだときだけ（「きょうのカレンダーに入れて 16日は…」の「きょう」を日付にしない：11/4 の言い方）
+    `(?<rel>(?:${REL})(?:\\s*[と・、,，]\\s*(?:${REL}))+)`,
+    `(?<wdrange>${Q}${NB}[月火水木金土日]曜?日?\\s*${SEP}\\s*[月火水木金土日]曜?日?(?:まで)?)`,
+    `(?<wdset>${Q}${NB}(?:[月火水木金土日](?:曜日?)?\\s*[・、,，と]?\\s*){2,})`,
+    `(?<wd>${Q}${NB}[月火水木金土日]曜日?)`,
+    `(?<week>今週|来週|再来週)`,
+  ].join("|"),
+  "g",
+);
+
+interface DaySpec {
+  index: number;
+  end: number;
+  /** 日付で決まるもの（range・list・date・rel） */
+  dates?: string[];
+  /** 曜日で決まるもの。週は自分の言葉（「来週の月水金」）か、前の言葉から */
+  weekdays?: number[];
+  qualifier?: string;
+  /** 「来週」だけ（あとに曜日が無ければ、その週の月〜金） */
+  week?: string;
+}
+
+/** 曜日の番号（日=0）を日付に。毎週なら4週ぶん。週の言葉が無ければ、今日から数えて次のその曜日（今日を含む） */
+function datesOfWeekdays(weekdays: number[], qualifier: string | undefined, today: string): string[] {
+  const out: string[] = [];
+  for (const w of weekdays) {
+    if (qualifier === "毎週") {
+      const first = addDays(today, (w - weekdayOf(today) + 7) % 7);
+      for (let k = 0; k < 4; k++) out.push(addDays(first, 7 * k));
+    } else if (qualifier && qualifier in WEEK_WORD) {
+      out.push(addDays(mondayOfWeek(today, WEEK_WORD[qualifier]), (w + 6) % 7));
+    } else {
+      out.push(addDays(today, (w - weekdayOf(today) + 7) % 7));
+    }
+  }
+  return out;
+}
+
+/** その週の平日（今週なら今日から） */
+function weekdaysOfWeek(word: string, today: string): string[] {
+  const monday = mondayOfWeek(today, WEEK_WORD[word]);
+  return [0, 1, 2, 3, 4].map((n) => addDays(monday, n)).filter((d) => d >= today);
+}
+
+function scanDays(line: string, today: string): DaySpec[] | null {
+  const specs: DaySpec[] = [];
+  for (const m of line.matchAll(SPEC)) {
+    const g = m.groups ?? {};
+    const index = m.index ?? 0;
+    const end = index + m[0].length;
+    if (g.range) {
+      const [a, b] = g.range.split(new RegExp(SEP));
+      const month = /(\d{1,2})[/月]/.exec(a)?.[1];
+      const start = parseDay(/日|[/月]/.test(a) ? a : `${a}日`, today);
+      const endWord = /[/月]/.test(b) || !month ? b : `${month}/${/(\d{1,2})日/.exec(b)?.[1] ?? b}`;
+      const last = parseDay(endWord, today);
+      if (!start || !last || last < start) return null;
+      const dates: string[] = [];
+      // 範囲の日付は平日だけ（「18日〜22日のお迎え」に土日の保育所の枠を作らない）。長すぎる範囲は読まない
+      for (let d = start; d <= last && dates.length < 31; d = addDays(d, 1)) if (weekdayOf(d) !== 0 && weekdayOf(d) !== 6) dates.push(d);
+      specs.push({ index, end, dates });
+    } else if (g.list) {
+      if (!g.list.includes("日")) continue;
+      const month = /(\d{1,2})[/月]/.exec(line.slice(Math.max(0, index - 3), index))?.[1];
+      const nums = [...g.list.matchAll(/(\d{1,2})日?/g)].map((x) => x[1]);
+      const dates = nums.map((n) => parseDay(month ? `${month}/${n}` : `${n}日`, today)).filter((d): d is string => d !== null);
+      specs.push({ index, end, dates });
+    } else if (g.date) {
+      const d = parseDay(g.date.replace(/[（(][月火水木金土日][)）]|[月火水木金土日]曜日?$/, ""), today);
+      if (d) specs.push({ index, end, dates: [d] });
+    } else if (g.rel) {
+      const dates = g.rel.split(/\s*[と・、,，]\s*/).map((w) => parseDay(w, today)).filter((d): d is string => d !== null);
+      specs.push({ index, end, dates });
+    } else if (g.wdrange || g.wdset || g.wd) {
+      const raw = g.wdrange ?? g.wdset ?? g.wd;
+      const qualifier = /^(今週|来週|再来週|毎週)/.exec(raw)?.[1];
+      // 「曜日」の「日」を日曜と読まない
+      const chars = [...raw.replace(/^(今週|来週|再来週|毎週)の?/, "").replace(/曜日?/g, "").matchAll(/[月火水木金土日]/g)].map((x) => WEEKDAY.indexOf(x[0]));
+      let weekdays = [...new Set(chars)];
+      if (g.wdrange) {
+        // 「月〜金」：月曜はじまりで並べて、その間を全部
+        const [a, b] = [chars[0], chars[chars.length - 1]].map((w) => (w + 6) % 7);
+        weekdays = [];
+        for (let w = a; w <= b; w++) weekdays.push((w + 1) % 7);
+      }
+      if (weekdays.length > 0) specs.push({ index, end, weekdays, qualifier });
+    } else if (g.week) {
+      specs.push({ index, end, week: g.week });
+    }
+  }
+  // 「18日から来週の金曜まで」のような、日付と曜日をまたぐ範囲は読まない（2日だけになる）
+  for (let i = 1; i < specs.length; i++) {
+    if (new RegExp(`^\\s*${SEP}`).test(line.slice(specs[i - 1].end, specs[i].index))) return null;
+  }
+  return specs;
+}
+
+/** 打ち消された人（「ばあばじゃなくてパパ」「ばあば以外」）は担当と読まない */
+const NOT_THIS = new RegExp(
+  `(${Object.values(ROLE_WORDS).join("|")}|${HELPER.source})(さん|ちゃん)?((では|じゃ)なく(て)?|の(代わり|かわり)に?|以外(で|に|の|は)?)`,
+  "g",
+);
+/** 報告の言い方（parseAssignment の SAID と同じ） */
+const REPORT_WORDS = /になりました|になった|になります|に決ま|で決ま|決まりました|入れて|いれて|行きます|いきます|行く|いく|やります|担当|頼みました|頼んだ|たのんだ|お願いしました|お願いした|依頼しました|依頼した|します|行ってくれ|が行|がお迎え|が送り/;
+
+/**
+ * その区切りの担当（家族の呼び名・家族以外（ファミサポ）・なし）。担当として言い切っているときだけ：
+ * 名前のあとが「です」「お願い」「が」「は」か区切り・行の終わり、または報告の言い方がある。
+ * 「パパは出張です」「ばあばは来られない」は担当にしない。2人以上なら決めつけない
+ */
+function personIn(text: string): { who: Adult | null; note: string | null } | null {
+  const t = text.replace(NOT_THIS, "");
+  // 送り迎えのすぐあとの「なし」、全員のすぐあとの「休み」だけ（「冬休みなので」「給食なし」を、送り迎えなしと読まない）
+  if (/(全員|みんな|\d人とも|きょうだい)[^。\n]{0,8}(休み|欠席)/.test(t)) return { who: null, note: "お休み" };
+  if (/(お迎え|迎え|送り|送迎|送り迎え)は?[\s　、]*(なし|無し|いらない|要らない|不要)/.test(t)) return { who: null, note: "なし" };
+  const helper = HELPER.exec(t)?.[0] ?? null;
+  const withoutGrand = t.replace(/祖父|祖母|義父|義母/g, "");
+  const roles = ADULTS.filter((a) => new RegExp(ROLE_WORDS[a]).test(a === "パパ" || a === "ママ" ? withoutGrand : t));
+  if ((helper ? 1 : 0) + roles.length !== 1) return null;
+  const name = helper ?? ROLE_WORDS[roles[0]];
+  const stated = new RegExp(
+    `(${name})(さん|ちゃん)?(です|でーす|だよ|でお願いします|でお願い|お願いします|お願い|になりました|になります|に決まりました|が|は|で|に)?[\\s　、。！!]*$`,
+  ).test(t.trim());
+  if (!stated && !REPORT_WORDS.test(t)) return null;
+  return helper ? { who: null, note: helper } : { who: roles[0], note: null };
+}
+
+function kindsIn(text: string): ("送り" | "迎え")[] | null {
+  if (/送り迎え|送迎|送りも(お)?迎えも|(お)?迎えも送りも/.test(text)) return ["送り", "迎え"];
+  if (/迎え|むかえ/.test(text)) return ["迎え"];
+  if (/送り|おくり/.test(text) && !/おくりもの|贈り/.test(text)) return ["送り"];
+  return null;
+}
+
+/** 日付の順、同じ日なら送り → 迎え */
+function byDayKind(a: { date: string; kind: string }, b: { date: string; kind: string }) {
+  return a.date.localeCompare(b.date) || (a.kind === b.kind ? 0 : a.kind === "送り" ? -1 : 1);
+}
+
+export type BulkRequest =
+  | { mode: "assign"; list: Assignment[]; weekly: boolean }
+  | { mode: "ask"; items: { date: string; kind: "送り" | "迎え"; time: string | null }[] };
+
+/**
+ * まとめての頼み。2日以上の話のときだけ読む（1日だけなら null → ふだんの読み方へ）。
+ *  担当を言い切っている → mode "assign"（「月水金はばあば、火木はパパ」「ばあばが月水金、パパが火木」）
+ *  「だれか」「行ける人」「行ける？」→ mode "ask"（担当は決めない）
+ * 頼み・問い・断り・迷いがあれば担当を決めない。分からない区切りが1つでもあれば何も入れない。過ぎた日は入れない
+ */
+export function parseBulk(text: string, today: string): BulkRequest | null {
+  const t = toHalfWidth(text).trim();
+  if (/無理|むり|行けない|いけない|行けなく|行けません|できない|難しい|むずかし|厳し|ダメ|だめ|取り消|キャンセル/.test(t)) return null;
+  // 済んだ話・お礼（「先週は月水金ばあばが行ってくれて助かった」）は、これからの担当にしない（11/17 の見直し）
+  if (/先週|先月|昨日|きのう|一昨日|おととい|でした|だった|くれた|くれて|てくれ|助かっ|ありがと|お疲れ|おつかれ/.test(t)) return null;
+  // 「ばあばに頼んで」は、その人に聞く話（名指し）。まとめては読まない
+  if (/(に|へ)[\s　]*(頼んで|たのんで|頼んどいて|お願いして|お願いしといて|お願いします|お願いしたい|聞いて|きいて|依頼して|任せ|まかせ)/.test(t)) return null;
+  // 「行ける人？」と聞いているときだけ札を出す（「何時だっけ？」のような問いは聞き取りにしない）
+  const asking = /だれか|誰か|どなたか|行ける|いける|行けます|頼める|頼みたい|お願いできる|行ってくれる|いる[?？]|いますか|どう[?？]/.test(t);
+  const blocked = asking || /[?？]/.test(t) || NOT_A_REPORT.test(t) || /かも|たぶん|多分|未定|かな[ー〜!！\s　]*$|出張|残業|仕事|用事|遅番|不在|いない/.test(t);
+
+  const assigns = new Map<string, Assignment>();
+  const asks = new Map<string, { date: string; kind: "送り" | "迎え"; time: string | null }>();
+  let weekly = false;
+  // 行をまたいで引き継ぐ：送り／迎え と、週の言葉（「来週のお迎え\n月水金はばあば\n火木はパパ」）
+  let kinds: ("送り" | "迎え")[] | null = null;
+  let carried: string | undefined;
+  let anyDays = false;
+  for (const line of t.split(/[\n。]/).map((l) => l.trim()).filter(Boolean)) {
+    const specs = scanDays(line, today);
+    if (specs === null) return null;
+    kinds = kindsIn(line) ?? kinds;
+    const dayed = specs.filter((s) => !s.week);
+    const weekWords = specs.filter((s) => s.week && (dayed.length === 0 || s.index < dayed[0].index)).map((s) => s.week!);
+    if (weekWords.length > 0) carried = weekWords[weekWords.length - 1];
+    let parts: { spec: DaySpec | null; dates: string[] }[] = dayed.map((s) => {
+      const qualifier = s.qualifier ?? carried;
+      if (s.qualifier && s.qualifier !== "毎週") carried = s.qualifier;
+      if (qualifier === "毎週") weekly = true;
+      return { spec: s, dates: s.dates ?? datesOfWeekdays(s.weekdays ?? [], qualifier, today) };
+    });
+    const linePerson = personIn(line.replace(/(今週|来週|再来週)の?/g, ""));
+    if (parts.length === 0) {
+      // 「来週のお迎えはずっとばあば」「今週と来週の送り だれか」：週の言葉だけ → その週の平日。担当も問いも無ければ見出し（次の行へ引き継ぐ）
+      if (weekWords.length === 0 || (!linePerson && !asking)) continue;
+      parts = [{ spec: null, dates: weekWords.flatMap((w) => weekdaysOfWeek(w, today)) }];
+    }
+    anyDays = true;
+    // 担当が日の前か後か：「ばあばが月水金、パパが火木」（前）／「月水金はばあば、火木はパパ」（後）
+    const before = dayed.length > 0 ? personIn(line.slice(0, dayed[0].index)) : null;
+    let pending: string[] = [];
+    for (const [i, p] of parts.entries()) {
+      const next = parts[i + 1]?.spec?.index ?? line.length;
+      const after = p.spec ? line.slice(p.spec.end, next) : line;
+      const prevEnd = i === 0 ? 0 : (parts[i - 1].spec?.end ?? 0);
+      const lead = p.spec ? line.slice(prevEnd, p.spec.index) : "";
+      const person = before && dayed.length > 1 ? personIn(lead) : (personIn(after) ?? (parts.length === 1 ? linePerson : null));
+      const k = kindsIn(after) ?? kindsIn(lead) ?? kinds;
+      const dates = [...pending, ...p.dates].filter((d) => d >= today);
+      if (!k) return null;
+      if (!person) {
+        // 「18日、19日はばあば」：担当の無い日は、次に出てくる担当と同じ。最後まで担当が無ければ「行ける人？」の候補
+        pending = dates;
+        if (i === parts.length - 1) for (const date of dates) for (const kind of k) asks.set(`${date}|${kind}`, { date, kind, time: parseTime(after, kind) });
+        continue;
+      }
+      pending = [];
+      for (const date of dates) {
+        for (const kind of k) {
+          assigns.set(`${date}|${kind}`, { date, kind, time: k.length > 1 && kind === "送り" ? null : parseTime(after, kind), who: person.who, note: person.note });
+        }
+      }
+    }
+  }
+  if (!anyDays) return null;
+  const distinct = (keys: Iterable<string>) => new Set([...keys].map((key) => key.split("|")[0])).size;
+  if (!blocked && assigns.size > 0 && asks.size === 0 && distinct(assigns.keys()) >= 2) {
+    return { mode: "assign", list: [...assigns.values()].sort(byDayKind).slice(0, 20), weekly };
+  }
+  if (asking) {
+    // 問いの文は、担当の名前が出ていても決めない（「ばあば行ける？」「ばあば以外で行ける人いる？」）。全部の日を聞く
+    const all = new Map(asks);
+    for (const [key, a] of assigns) all.set(key, { date: a.date, kind: a.kind, time: a.time });
+    if (distinct(all.keys()) >= 2) return { mode: "ask", items: [...all.values()].sort(byDayKind).slice(0, 12) };
+  }
+  return null;
+}

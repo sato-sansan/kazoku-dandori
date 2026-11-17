@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { READ_RESULT_SCHEMA, type Card, type ReadResult } from "./card";
 import type { ImageType } from "./line";
-import type { FamilyProfile } from "./profile";
+import { aliasNote, type FamilyProfile } from "./profile";
 
 const READ_MODEL = "claude-sonnet-5-5";
 // 自信が低いカードが出たときだけ、上位のモデルで読み直す
@@ -46,6 +46,7 @@ export async function readNotice(apiKey: string, input: ReadInput): Promise<Read
   const context = [
     `今日：${today}`,
     `<family>${JSON.stringify(input.profile)}</family>`,
+    aliasNote(input.profile),
     input.previousCards && `<previous_cards>${JSON.stringify(input.previousCards)}</previous_cards>`,
     input.text ? `<message>${input.text}</message>` : "添付の画像を読んでください。",
   ]
