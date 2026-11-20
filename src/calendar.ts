@@ -4,6 +4,7 @@
 
 import { seasonEmoji, type AdventureStats } from "./adventure";
 import type { Card } from "./card";
+import { dayOffName, holidayName, isDayOff } from "./holiday";
 import type { Slot } from "./types";
 import { addDays, jstToMs, jstWeekday } from "./time";
 
@@ -192,8 +193,8 @@ function slotChips(slots: Slot[]) {
 
 /** まだ枠の無い先の平日の「朝の送り」「お迎え」。直しているときだけ出す（押すと担当を先に決められる） */
 function ghostChips(date: string, today: string, daySlots: Slot[]) {
-  const wd = jstWeekday(date);
-  if (date < today || wd === 0 || wd === 6) return "";
+  // 土日・祝日・年末年始は保育所の送迎がない
+  if (date < today || isDayOff(date)) return "";
   return (["送り", "迎え"] as const)
     .filter((k) => !daySlots.some((s) => s.kind === k))
     .map((k) => {
@@ -283,7 +284,9 @@ function navLink(baseUrl: string, view: CalendarInput["view"], anchor: string) {
 function dayHead(date: string, today: string) {
   const [, , dd] = date.split("-").map(Number);
   const wd = jstWeekday(date);
-  return `<h3 class="dn"><span class="num${wd === 0 ? " sun" : wd === 6 ? " sat" : ""}">${dd}</span><span class="wd">${WEEKDAY[wd]}</span>${date === today ? '<span class="tdy">今日</span>' : ""}</h3>`;
+  const hol = holidayName(date);
+  const off = dayOffName(date);
+  return `<h3 class="dn"><span class="num${wd === 0 || hol ? " sun" : wd === 6 ? " sat" : ""}">${dd}</span><span class="wd">${WEEKDAY[wd]}</span>${off ? `<span class="hol">${esc(off)}</span>` : ""}${date === today ? '<span class="tdy">今日</span>' : ""}</h3>`;
 }
 
 /** 1日ぶんの中身：送迎の担当 → 予定（時刻順）→ 写真。何もなければ「予定なし」 */
@@ -322,7 +325,8 @@ function cellInner(d: string, input: CalendarInput, slots: Slot[], idx: Map<stri
     })
     .join("");
   const extra = cards.length > 3 ? `<span class="more">+${cards.length - 3}</span>` : "";
-  return `<span class="dn"><span class="num${wd === 0 ? " sun" : wd === 6 ? " sat" : ""}">${dd}</span>${photoDays.has(d) ? '<span class="cam" aria-label="写真あり">📷</span>' : ""}</span><span class="evs">${chips}${extra}</span><span class="pks">${marks.join("")}</span>`;
+  const hol = holidayName(d);
+  return `<span class="dn"><span class="num${wd === 0 || hol ? " sun" : wd === 6 ? " sat" : ""}"${hol ? ` title="${esc(hol)}"` : ""}>${dd}</span>${photoDays.has(d) ? '<span class="cam" aria-label="写真あり">📷</span>' : ""}</span><span class="evs">${chips}${extra}</span><span class="pks">${marks.join("")}</span>`;
 }
 
 /** 月の升目と、その月の各週の中身（週の表示は、この中身を1週ずつ出す）。1枚に全部入れておき、切り替えは JS で */
@@ -375,9 +379,40 @@ ${weeks.join("")}
 function soonHtml(input: CalendarInput, idx: Map<string, number>) {
   const slots = liveSlots(input.slots);
   const tomorrow = addDays(input.today, 1);
-  const day = (date: string, word: string) =>
-    `<div class="sd"><h3 class="sdh"><span class="tag">${word}</span>${esc(shortDate(date))}</h3>${dayBody(date, input, slots, idx)}</div>`;
-  return `<section class="soon" id="soon" aria-label="今日と明日">${day(input.today, "今日")}${day(tomorrow, "明日")}</section>`;
+  const day = (date: string, word: string) => {
+    const off = dayOffName(date);
+    return `<div class="sd"><h3 class="sdh"><span class="tag">${word}</span>${esc(shortDate(date))}${off ? `<span class="hol">${esc(off)}</span>` : ""}</h3>${dayBody(date, input, slots, idx)}</div>`;
+  };
+  return `<section class="soon" id="soon" aria-label="今日と明日">${day(input.today, "今日")}${day(tomorrow, "明日")}${countdownHtml(input, idx)}</section>`;
+}
+
+/** もうすぐの行事：「🎉 遠足まで あと3日」。明後日から2週間先まで、近い順に3つ。子どもに話すきっかけに（11/18） */
+export function upcomingEvents(cards: Card[], today: string, limit = 3) {
+  const from = addDays(today, 2);
+  const to = addDays(today, 14);
+  const seen = new Set<string>();
+  return cards
+    .filter((c) => c.kind === "行事" && c.date && c.date >= from && c.date <= to)
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? "") || byTime(a, b))
+    .filter((c) => {
+      const key = `${c.date}|${c.title}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit)
+    .map((c) => ({ card: c, days: Math.round((Date.parse(`${c.date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000) }));
+}
+
+function countdownHtml(input: CalendarInput, idx: Map<string, number>) {
+  const soon = upcomingEvents(input.cards, input.today);
+  if (soon.length === 0) return "";
+  const items = soon.map(({ card, days }) => {
+    const all = !card.child || card.child === "全員";
+    const who = all ? "" : `<i class="dot" ${childStyle(idx, card.child)}></i>`;
+    return `<li>${who}<b>${esc(card.title)}</b>まで あと<b class="n">${days}</b>日<small>${esc(shortDate(card.date!))}</small></li>`;
+  });
+  return `<div class="cd"><h3 class="sdh">🎉 もうすぐ</h3><ul>${items.join("")}</ul></div>`;
 }
 
 /** 子どもの呼び名を変える欄（直しているときだけ）。変えると前に入れた予定も新しい呼び名になる */
@@ -452,6 +487,12 @@ main{padding:10px 12px 24px}
 .sdh .tag{background:var(--ink);color:#fff;border-radius:999px;padding:1px 10px;font-size:.85rem}
 .sd:nth-child(2) .tag{background:var(--sub)}
 .sd .chips{margin:2px 0 4px}.sd .thumbs{display:none}
+.hol{font-size:.75rem;font-weight:normal;color:var(--nd)}
+.cd{grid-column:1/-1;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 10px}
+.cd ul{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px 14px}
+.cd li{display:flex;align-items:center;gap:4px}
+.cd .n{font-size:1.2em;color:var(--nd)}.cd small{color:var(--sub);margin-left:2px}
+.cd .dot{display:inline-block;width:.7em;height:.7em;border-radius:50%}
 @media (max-width:420px){.soon{grid-template-columns:1fr}}
 h2 small{font-weight:normal;color:var(--sub);font-size:.8rem;margin-left:8px}
 .nb{white-space:nowrap}

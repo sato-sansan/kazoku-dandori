@@ -3,6 +3,7 @@
 import type { Card } from "./card";
 import type { FlexMessage, OutMessage, TextMessage } from "./line";
 import type { FamilyProfile } from "./profile";
+import { dayOffName, isDayOff } from "./holiday";
 import { ADULTS, type Adult, type Slot } from "./types";
 
 // 毎日の枠の時刻。朝は未確認なので 7:30 で仮置き（DESIGN §4）
@@ -23,15 +24,10 @@ function addDays(date: string, n: number) {
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
 
-/** 土日なら次の月曜。平日はそのまま（金曜に「明日の段取り」を聞かれたら、週末をはさんで月曜を見るため） */
+/** 土日・祝日・年末年始なら次の保育所がある日。そうでなければそのまま（金曜に「明日の段取り」を聞かれたら、週末をはさんで月曜を見るため） */
 export function nextWeekday(date: string): string {
   let d = date;
-  for (let i = 0; i < 2; i++) {
-    const [y, m, dd] = d.split("-").map(Number);
-    const w = new Date(Date.UTC(y, m - 1, dd)).getUTCDay();
-    if (w !== 0 && w !== 6) break;
-    d = addDays(d, 1);
-  }
+  for (let i = 0; i < 10 && isDayOff(d); i++) d = addDays(d, 1);
   return d;
 }
 
@@ -597,8 +593,14 @@ interface DaySpec {
   week?: string;
 }
 
-/** 曜日の番号（日=0）を日付に。毎週なら4週ぶん。週の言葉が無ければ、今日から数えて次のその曜日（今日を含む） */
-function datesOfWeekdays(weekdays: number[], qualifier: string | undefined, today: string): string[] {
+/** 平日の祝日・年末年始（保育所が休み）。曜日や範囲から出た日には入れない（はっきり日付で言った日は入れる） */
+function offWeekday(date: string) {
+  const w = weekdayOf(date);
+  return w !== 0 && w !== 6 && dayOffName(date) !== null;
+}
+
+/** 曜日の番号（日=0）を日付に。毎週なら4週ぶん。週の言葉が無ければ、今日から数えて次のその曜日（今日を含む）。祝日は skip へ */
+function datesOfWeekdays(weekdays: number[], qualifier: string | undefined, today: string, skip: Set<string>): string[] {
   const out: string[] = [];
   for (const w of weekdays) {
     if (qualifier === "毎週") {
@@ -610,16 +612,19 @@ function datesOfWeekdays(weekdays: number[], qualifier: string | undefined, toda
       out.push(addDays(today, (w - weekdayOf(today) + 7) % 7));
     }
   }
-  return out;
+  for (const d of out) if (offWeekday(d)) skip.add(d);
+  return out.filter((d) => !offWeekday(d));
 }
 
 /** その週の平日（今週なら今日から） */
-function weekdaysOfWeek(word: string, today: string): string[] {
+function weekdaysOfWeek(word: string, today: string, skip: Set<string>): string[] {
   const monday = mondayOfWeek(today, WEEK_WORD[word]);
-  return [0, 1, 2, 3, 4].map((n) => addDays(monday, n)).filter((d) => d >= today);
+  const days = [0, 1, 2, 3, 4].map((n) => addDays(monday, n)).filter((d) => d >= today);
+  for (const d of days) if (offWeekday(d)) skip.add(d);
+  return days.filter((d) => !offWeekday(d));
 }
 
-function scanDays(line: string, today: string): DaySpec[] | null {
+function scanDays(line: string, today: string, skip: Set<string>): DaySpec[] | null {
   const specs: DaySpec[] = [];
   for (const m of line.matchAll(SPEC)) {
     const g = m.groups ?? {};
@@ -633,8 +638,12 @@ function scanDays(line: string, today: string): DaySpec[] | null {
       const last = parseDay(endWord, today);
       if (!start || !last || last < start) return null;
       const dates: string[] = [];
-      // 範囲の日付は平日だけ（「18日〜22日のお迎え」に土日の保育所の枠を作らない）。長すぎる範囲は読まない
-      for (let d = start; d <= last && dates.length < 31; d = addDays(d, 1)) if (weekdayOf(d) !== 0 && weekdayOf(d) !== 6) dates.push(d);
+      // 範囲の日付は平日だけ（「18日〜22日のお迎え」に土日の保育所の枠を作らない）。祝日も入れない。長すぎる範囲は読まない
+      for (let d = start; d <= last && dates.length < 31; d = addDays(d, 1)) {
+        if (weekdayOf(d) === 0 || weekdayOf(d) === 6) continue;
+        if (offWeekday(d)) skip.add(d);
+        else dates.push(d);
+      }
       specs.push({ index, end, dates });
     } else if (g.list) {
       if (!g.list.includes("日")) continue;
@@ -714,9 +723,10 @@ function byDayKind(a: { date: string; kind: string }, b: { date: string; kind: s
   return a.date.localeCompare(b.date) || (a.kind === b.kind ? 0 : a.kind === "送り" ? -1 : 1);
 }
 
+/** skipped：曜日や範囲から出た日のうち、祝日・年末年始で入れなかった平日（返事で知らせる） */
 export type BulkRequest =
-  | { mode: "assign"; list: Assignment[]; weekly: boolean }
-  | { mode: "ask"; items: { date: string; kind: "送り" | "迎え"; time: string | null }[] };
+  | { mode: "assign"; list: Assignment[]; weekly: boolean; skipped: string[] }
+  | { mode: "ask"; items: { date: string; kind: "送り" | "迎え"; time: string | null }[]; skipped: string[] };
 
 /**
  * まとめての頼み。2日以上の話のときだけ読む（1日だけなら null → ふだんの読み方へ）。
@@ -742,8 +752,9 @@ export function parseBulk(text: string, today: string): BulkRequest | null {
   let kinds: ("送り" | "迎え")[] | null = null;
   let carried: string | undefined;
   let anyDays = false;
+  const skip = new Set<string>();
   for (const line of t.split(/[\n。]/).map((l) => l.trim()).filter(Boolean)) {
-    const specs = scanDays(line, today);
+    const specs = scanDays(line, today, skip);
     if (specs === null) return null;
     kinds = kindsIn(line) ?? kinds;
     const dayed = specs.filter((s) => !s.week);
@@ -753,13 +764,13 @@ export function parseBulk(text: string, today: string): BulkRequest | null {
       const qualifier = s.qualifier ?? carried;
       if (s.qualifier && s.qualifier !== "毎週") carried = s.qualifier;
       if (qualifier === "毎週") weekly = true;
-      return { spec: s, dates: s.dates ?? datesOfWeekdays(s.weekdays ?? [], qualifier, today) };
+      return { spec: s, dates: s.dates ?? datesOfWeekdays(s.weekdays ?? [], qualifier, today, skip) };
     });
     const linePerson = personIn(line.replace(/(今週|来週|再来週)の?/g, ""));
     if (parts.length === 0) {
       // 「来週のお迎えはずっとばあば」「今週と来週の送り だれか」：週の言葉だけ → その週の平日。担当も問いも無ければ見出し（次の行へ引き継ぐ）
       if (weekWords.length === 0 || (!linePerson && !asking)) continue;
-      parts = [{ spec: null, dates: weekWords.flatMap((w) => weekdaysOfWeek(w, today)) }];
+      parts = [{ spec: null, dates: weekWords.flatMap((w) => weekdaysOfWeek(w, today, skip)) }];
     }
     anyDays = true;
     // 担当が日の前か後か：「ばあばが月水金、パパが火木」（前）／「月水金はばあば、火木はパパ」（後）
@@ -789,15 +800,117 @@ export function parseBulk(text: string, today: string): BulkRequest | null {
     }
   }
   if (!anyDays) return null;
+  const skipped = [...skip].filter((d) => d >= today).sort();
   const distinct = (keys: Iterable<string>) => new Set([...keys].map((key) => key.split("|")[0])).size;
-  if (!blocked && assigns.size > 0 && asks.size === 0 && distinct(assigns.keys()) >= 2) {
-    return { mode: "assign", list: [...assigns.values()].sort(byDayKind).slice(0, 20), weekly };
+  // 2日以上の話か（祝日で外した日も数える：「月曜と水曜のお迎え」の月曜が祝日なら、水曜だけ入れて祝日のことを返す）
+  const enough = (n: number) => n >= 2 || (n >= 1 && skipped.length > 0);
+  if (!blocked && assigns.size > 0 && asks.size === 0 && enough(distinct(assigns.keys()))) {
+    return { mode: "assign", list: [...assigns.values()].sort(byDayKind).slice(0, 20), weekly, skipped };
   }
   if (asking) {
     // 問いの文は、担当の名前が出ていても決めない（「ばあば行ける？」「ばあば以外で行ける人いる？」）。全部の日を聞く
     const all = new Map(asks);
     for (const [key, a] of assigns) all.set(key, { date: a.date, kind: a.kind, time: a.time });
-    if (distinct(all.keys()) >= 2) return { mode: "ask", items: [...all.values()].sort(byDayKind).slice(0, 12) };
+    if (enough(distinct(all.keys()))) return { mode: "ask", items: [...all.values()].sort(byDayKind).slice(0, 12), skipped };
   }
   return null;
+}
+
+// ── 週の見通し（日曜の冒険カードと一緒に・「来週の予定」で）───────────
+// 11/18：ママが日曜の夜に来週を組み立てる手間を減らす。決まっていない送り迎え・行事・持ち物と締切・お休みの日を1枚に。
+// 通知は増やさない（日曜のカードと同じく、次にグループで話したときの返信に相乗り）
+
+export interface WeekAhead {
+  /** 「来週」「今週」「再来週」 */
+  word: string;
+  monday: string;
+  today: string;
+  open: { date: string; kinds: Slot["kind"][] }[];
+  events: { date: string; text: string }[];
+  items: { date: string; text: string }[];
+  offs: { date: string; name: string }[];
+}
+
+/** 予定カードから、週の行事・持ち物・締切の行（子どもの呼び名つき）。行事に持ち物があれば行事の行にまとめる */
+export function weekCardLines(cards: Card[], days: string[]) {
+  const who = (c: Card) => (c.child && c.child !== "全員" ? `${c.child} ` : "");
+  const money = (c: Card) => (c.money ? ` ${c.money.toLocaleString("ja-JP")}円` : "");
+  const things = (c: Card) => {
+    const rest = c.items.filter((i) => i !== c.title);
+    return rest.length > 0 ? `（${rest.join("・")}）` : "";
+  };
+  const inWeek = new Set(days);
+  const events: { date: string; text: string }[] = [];
+  const items: { date: string; text: string }[] = [];
+  const seen = new Set<string>();
+  const add = (list: { date: string; text: string }[], date: string, text: string) => {
+    if (seen.has(`${date}|${text}`)) return;
+    seen.add(`${date}|${text}`);
+    list.push({ date, text });
+  };
+  for (const c of cards) {
+    if (c.date && inWeek.has(c.date) && c.kind === "行事") add(events, c.date, `${who(c)}${c.title}${things(c)}`);
+    else if (c.date && inWeek.has(c.date) && (c.items.length > 0 || c.money)) add(items, c.date, `${who(c)}${c.title}${things(c)}${money(c)}`);
+    if (c.deadline && inWeek.has(c.deadline) && c.deadline !== c.date) add(items, c.deadline, `${who(c)}${c.title} の締切${money(c)}`);
+  }
+  const byDate = (a: { date: string }, b: { date: string }) => a.date.localeCompare(b.date);
+  return { events: events.sort(byDate), items: items.sort(byDate) };
+}
+
+export function weekAheadMessage(w: WeekAhead): FlexMessage {
+  const sunday = addDays(w.monday, 6);
+  const range = `${shortDate(w.monday)}〜${shortDate(sunday)}`;
+  const line = (text: string, opts: Record<string, unknown> = {}) => ({ type: "text", text, size: "sm", wrap: true, ...opts });
+  const head = (text: string) => line(text, { weight: "bold", margin: "md" });
+  const day = (date: string) => dayLabel(date, w.today);
+  const MAX = 4;
+  const body: Record<string, unknown>[] = [];
+  const openCount = w.open.reduce((n, o) => n + o.kinds.length, 0);
+  if (openCount > 0) {
+    body.push(head(`🚗 決まっていない送り迎え ${openCount}つ`));
+    for (const o of w.open.slice(0, MAX)) body.push(line(`${day(o.date)} ${o.kinds.map(kindWord).join("・")}`));
+    if (w.open.length > MAX) body.push(line(`ほか ${w.open.length - MAX}日`, { color: "#888888" }));
+  } else {
+    body.push(head("🚗 送り迎えは全部決まっています"));
+  }
+  const section = (title: string, list: { date: string; text: string }[]) => {
+    if (list.length === 0) return;
+    body.push(head(title));
+    for (const x of list.slice(0, MAX)) body.push(line(`${day(x.date)} ${x.text}`));
+    if (list.length > MAX) body.push(line(`ほか ${list.length - MAX}件はだんどり帳で`, { color: "#888888" }));
+  };
+  section("🎉 行事", w.events);
+  section("🎒 持ち物・集金・締切", w.items);
+  section("🎌 お休みの日", w.offs.map((o) => ({ date: o.date, text: o.name })));
+
+  const askText = `${w.word}の送り迎え、行ける人いる？`;
+  const buttons: Record<string, unknown>[] = [];
+  if (openCount > 0) buttons.push({ type: "button", style: "primary", height: "sm", action: { type: "message", label: "🙋 まとめて聞く", text: askText } });
+  buttons.push({ type: "button", style: "secondary", height: "sm", action: { type: "message", label: "📒 だんどり帳", text: "予定 見せて" } });
+
+  const alt = [
+    `📅 ${w.word}の見通し ${range}`,
+    openCount > 0 ? `決まっていない送り迎え ${openCount}つ` : "送り迎えは全部決まっています",
+    ...w.events.slice(0, 2).map((e) => `${day(e.date)} ${e.text}`),
+  ].join("\n");
+  return {
+    type: "flex",
+    altText: alt.slice(0, 400),
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "xs",
+        paddingAll: "12px",
+        contents: [
+          { type: "text", text: `📅 ${w.word}の見通し`, weight: "bold", size: "md" },
+          { type: "text", text: range, size: "xs", color: "#666666" },
+          ...body,
+        ],
+      },
+      footer: { type: "box", layout: "horizontal", spacing: "sm", contents: buttons },
+    },
+  };
 }

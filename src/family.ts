@@ -1,3 +1,4 @@
+import { dayOffName, isDayOff } from "./holiday";
 import { DurableObject } from "cloudflare:workers";
 import {
   computeAdventure,
@@ -41,6 +42,8 @@ import {
   describeSlot,
   nextWeekday,
   parseAccept,
+  weekAheadMessage,
+  weekCardLines,
   parseAssignment,
   parseDay,
   parseDecline,
@@ -94,17 +97,14 @@ const MENU_BUTTONS: QuickButton[] = [
 const MENU_TEXT = "何をしますか？";
 /** 呼ばれたのに分からなかったとき。黙らずに入口を出す */
 const NOT_UNDERSTOOD = "ごめんなさい、分かりませんでした。下のボタンからどうぞ。";
+// 11/18：10行 → 6行。送り迎えの言い方は「ふだんの言葉で」に1行でまとめた（覚えることを減らす）
 const HOW_TO = `だんどりさんへの頼み方
-📷 お便りの写真を送る → 予定にします（写真は残るので紙は捨ててOK）
+📷 お便りの写真を送る → 予定に（写真は残るので紙は捨ててOK）
+🚗 送り迎えはふだんの言葉で（「明日のお迎え だれか」「5日の朝 難しい」「来週の月水金はばあば」）
 🤒「熱で休み」→ 園・学校への連絡文を［コピー］
-🚗「明日のお迎え だれか」→ 家族の名前ボタン
-🙋「5日の朝の送り 難しい」→ 家族に聞き直します
-👉「ばあばに頼んで」→ その人に名指しで聞きます
-📆「来週の月水金のお迎えはばあば、火木はパパ」「来週のお迎え 行ける人？」→ まとめて入れる・聞く
+📅「予定 見せて」→ だんどり帳／「来週の予定」→ 来週の見通し
 🌱 写真＋「思い出に入れておいて」→ 成長記録に
-📅「予定 見せて」→ わが家のだんどり帳（月・週・今日と明日）
-🙏 ありがとうは、決まった札を長押ししてリアクションで
-1対1のトークでは、下の「メニュー」から同じことができます`;
+🙏 ありがとうは、札を長押ししてリアクションで`;
 
 interface QueuedEvent {
   familyId: string;
@@ -491,18 +491,22 @@ export class Family extends DurableObject<Env> {
    * まとめて「行ける人？」（「来週のお迎え、行ける人いる？」）。何日ぶんかの札を1通にまとめて（横にめくる）出す。
    * もう決まっている日は札を出さずに1行で。土日は毎日の枠が無いので、枠のある日だけ。頼んだ人のボタンは出さない
    */
-  private async bulkAsk(queued: QueuedEvent, items: { date: string; kind: Slot["kind"]; time: string | null }[], today: string) {
+  private async bulkAsk(queued: QueuedEvent, items: { date: string; kind: Slot["kind"]; time: string | null }[], today: string, skipped: string[] = []) {
     const role = this.roleOf(queued.event.source.userId);
     const bubbles: Record<string, unknown>[] = [];
     const decided: string[] = [];
     for (const it of items) {
-      // もうある枠はそのまま使う（決まっていない枠の時刻を 17:30 に戻さない）。土日は毎日の枠が無いので、枠のある日だけ
+      // もうある枠はそのまま使う（決まっていない枠の時刻を 17:30 に戻さない）。土日は毎日の枠が無いので、枠のある日だけ。
+      // 祝日は、曜日や範囲から出た日なら parseBulk で外してある。ここに来た祝日は日付ではっきり言った日なので聞く
       const existing = this.slotsOf([it.date]).filter((s) => s.kind === it.kind && s.status !== "取消");
+      const weekend = jstWeekday(it.date) === 0 || jstWeekday(it.date) === 6;
       const slot =
         existing.find((s) => s.place === "保育所") ??
         existing[0] ??
-        (isWeekend(it.date) ? null : this.findOrCreateSlot(it.date, it.time ?? (it.kind === "迎え" ? "17:30" : "07:30"), it.kind, queued.event.source.type === "user" ? "1対1" : "グループ"));
+        (weekend ? null : this.findOrCreateSlot(it.date, it.time ?? (it.kind === "迎え" ? "17:30" : "07:30"), it.kind, queued.event.source.type === "user" ? "1対1" : "グループ"));
       if (!slot) continue;
+      // 時刻を過ぎた枠は聞かない（月曜の朝に週の見通しの［まとめて聞く］を押されても、その朝の送りは聞かない）
+      if (slot.date < today || (slot.date === today && slot.time <= jstTime())) continue;
       if (slot.status === "決定" || slot.status === "不要") {
         decided.push(`${dayLabel(slot.date, today)}は${slot.who ?? slot.note ?? "なし"}`);
         continue;
@@ -510,7 +514,9 @@ export class Family extends DurableObject<Env> {
       // 「お願い中」にはしない：だれも押さなかった日は、その前の晩 19:00（と朝 7:00）にもう一度聞く
       bubbles.push(askMessage(slot, { exclude: role ?? undefined }).contents);
     }
-    const already = decided.length > 0 ? `決まっている日：${decided.join("、")}` : "";
+    const already = [decided.length > 0 ? `決まっている日：${decided.join("、")}` : "", skipped.length > 0 ? skippedLine(skipped, today) : ""]
+      .filter(Boolean)
+      .join("\n");
     if (bubbles.length === 0) {
       await this.send(queued, [{ type: "text", text: already || "聞ける日がありませんでした（土日は保育所の送り迎えがありません）。" }]);
       return;
@@ -751,12 +757,21 @@ export class Family extends DurableObject<Env> {
       return;
     }
 
+    // 「来週の予定」「今週の見通し」「段取り 来週」→ その週の見通し（決まっていない送り迎え・行事・持ち物と締切・お休みの日）
+    const ahead = /^(?:(今週|来週|再来週)の?(?:予定|見通し|段取り|だんどり)(?:は|を)?[\s　]*(?:見せて|みせて|教えて|おしえて)?|段取り[\s：:]*(今週|来週|再来週))[?？!！]?$/.exec(text);
+    if (ahead) {
+      const word = ahead[1] ?? ahead[2];
+      const monday = addDays(today, -((jstWeekday(today) + 6) % 7) + 7 * (word === "今週" ? 0 : word === "来週" ? 1 : 2));
+      await this.send(queued, [this.weekAhead(monday, word, today)]);
+      return;
+    }
+
     // デモと確認用：「段取り 明日」で19:00の処理を今やる、「段取り 冒険」で日曜のカードを今出す
     if (/^段取り[\s：:]*明日$/.test(text)) {
       // 金曜・土曜に打ったら、週末に聞くこと（習い事・持ち物など）が無ければ、月曜（次の平日）の分を聞く。
       // 週末をはさむ家の段取りは月曜が本番のため（撮影 C04f）。19:00 の自動の聞き取りは変えない（月曜を2回聞かない）
       let target = addDays(today, 1);
-      if (isWeekend(target)) {
+      if (isDayOff(target)) {
         const cards = this.okCards();
         this.upsertSlots(slotsFromCards(cards, target));
         const busy = this.slotsOf([target]).some((s) => s.status === "未定") || itemsMessage(cards, target) !== null;
@@ -799,11 +814,11 @@ export class Family extends DurableObject<Env> {
     // 2日以上の話だけ。1日だけの話は下の決まった報告・頼みの道へ
     const bulk = parseBulk(text, today);
     if (bulk?.mode === "assign") {
-      await this.applyAssignment(queued, bulk.list, today, text, { bulk: true, weekly: bulk.weekly });
+      await this.applyAssignment(queued, bulk.list, today, text, { bulk: true, weekly: bulk.weekly, skipped: bulk.skipped });
       return;
     }
     if (bulk?.mode === "ask") {
-      await this.bulkAsk(queued, bulk.items, today);
+      await this.bulkAsk(queued, bulk.items, today, bulk.skipped);
       return;
     }
 
@@ -967,7 +982,7 @@ export class Family extends DurableObject<Env> {
    * 決まった報告を枠に入れて、短く返す。家族のだれかなら「決定」（引き受けとして数え、［ありがとう］と念押し）、
    * ファミサポ・お休みなら「不要」（19:00 の「行ける人？」も念押しも出さない）
    */
-  private async applyAssignment(queued: QueuedEvent, list: Assignment[], today: string, text: string, opts: { bulk?: boolean; weekly?: boolean } = {}) {
+  private async applyAssignment(queued: QueuedEvent, list: Assignment[], today: string, text: string, opts: { bulk?: boolean; weekly?: boolean; skipped?: string[] } = {}) {
     const by = this.roleOf(queued.event.source.userId);
     let lines: string[] = [];
     // まとめての報告（3件以上）は、担当ごとに1行にまとめて返す（「✅ お迎え ばあば：11/23（月）・11/25（水）」）
@@ -1042,6 +1057,7 @@ export class Family extends DurableObject<Env> {
         }),
         ...(fixed.length > 0 ? [`（${[...new Set(fixed)].join("・")}は、前の担当から直しました）`] : []),
         ...(opts.weekly ? ["（毎週の分は、4週先まで入れました）"] : []),
+        ...(opts.skipped?.length ? [skippedLine(opts.skipped, today)] : []),
         "都合が悪い日は「11/25のお迎え 無理」のように送ってください。",
       ];
     }
@@ -1537,7 +1553,8 @@ export class Family extends DurableObject<Env> {
   private async askForDate(date: string, retry: boolean, queued?: QueuedEvent) {
     const profile = this.profile();
     // 土日は保育所の送迎がない。お便り由来の枠（行事・習い事）だけ
-    if (!isWeekend(date)) this.upsertSlots(dailySlots(profile, date));
+    // 土日・祝日・年末年始は保育所の送迎がない（11/18：祝日にも「行ける人？」が出ていた）
+    if (!isDayOff(date)) this.upsertSlots(dailySlots(profile, date));
     const cards = this.okCards();
     this.upsertSlots(slotsFromCards(cards, date));
 
@@ -1662,6 +1679,33 @@ export class Family extends DurableObject<Env> {
     }
     // 日曜 20:00 のカードはプッシュしない。次にグループで話したときの返信に乗せる（3日まで待つ）
     this.defer([card], "weekly", Date.now() + 3 * 86_400_000);
+    // 来週の見通しも同じく相乗り。中身は出す時に作り直す（待つ間に決まった送り迎えを数えない）。火曜まで
+    const today = jstDate();
+    const monday = addDays(today, ((8 - jstWeekday(today)) % 7) || 7);
+    this.defer([{ type: "text", text: "（週の見通し）" }], `weekahead:${monday}`, jstToMs(addDays(monday, 2), "00:00"));
+  }
+
+  /** 週の見通し（monday から日曜まで。今日より前の日は見ない）。通知はせず、返事か相乗りで出す */
+  private weekAhead(monday: string, word: string, today: string) {
+    const profile = this.profile();
+    const cards = this.okCards();
+    const now = jstTime();
+    const days = [0, 1, 2, 3, 4, 5, 6].map((n) => addDays(monday, n)).filter((d) => d >= today);
+    const open: { date: string; kinds: Slot["kind"][] }[] = [];
+    for (const d of days) {
+      const existing = this.slotsOf([d]).filter((s) => !(d === today && s.time < now));
+      const shapes = [...(isDayOff(d) ? [] : dailySlots(profile, d)), ...slotsFromCards(cards, d)].filter((sh) => !(d === today && sh.time < now));
+      const kinds = new Set<Slot["kind"]>();
+      for (const sh of shapes) {
+        const ex = existing.find((s) => s.kind === sh.kind && s.place === sh.place);
+        if (!ex || ex.status === "未定" || ex.status === "お願い中") kinds.add(sh.kind);
+      }
+      for (const s of existing) if (s.status === "未定" || s.status === "お願い中") kinds.add(s.kind);
+      if (kinds.size > 0) open.push({ date: d, kinds: (["送り", "迎え"] as const).filter((k) => kinds.has(k)) });
+    }
+    const { events, items } = weekCardLines(cards, days);
+    const offs = days.filter((d) => dayOffName(d)).map((d) => ({ date: d, name: dayOffName(d)! }));
+    return weekAheadMessage({ word, monday, today, open, events, items, offs });
   }
 
   // ── 定時の仕事（Cron は使わず、DO のアラームで） ───────────
@@ -2011,7 +2055,7 @@ export class Family extends DurableObject<Env> {
         const day = addDays(date, 7 * k);
         const same = this.slotsOf([day]).find((s) => s.kind === kind && s.place === place && s.status !== "取消");
         // 毎日の枠が無い日（土日）・保育所でない場所は、もうある枠だけ
-        if (!same && (place !== "保育所" || isWeekend(day))) continue;
+        if (!same && (place !== "保育所" || isDayOff(day))) continue;
         this.setSlotFromPage(same ?? this.findOrCreateSlot(day, kind === "迎え" ? "17:30" : "07:30", kind, "カレンダー"), choice as Adult | "ファミサポ" | "なし" | null, today);
         changed++;
       }
@@ -2088,7 +2132,7 @@ export class Family extends DurableObject<Env> {
         const s = this.slotsOf([card.date]).find(
           (x) => x.kind === shape.kind && x.place === shape.place && x.time === shape.time && (x.status === "未定" || x.status === "お願い中"),
         );
-        if (s && !(s.place === "保育所" && !isWeekend(card.date))) this.sql.exec("UPDATE slots SET status = '取消' WHERE id = ?", s.id);
+        if (s && !(s.place === "保育所" && !isDayOff(card.date))) this.sql.exec("UPDATE slots SET status = '取消' WHERE id = ?", s.id);
       }
     }
     const title = card.child && card.child !== "全員" ? `${card.child} ${card.title}` : card.title;
@@ -2360,6 +2404,15 @@ export class Family extends DurableObject<Env> {
       return !!slot && (slot.status === "未定" || slot.status === "お願い中") && jstToMs(slot.date, slot.time) > Date.now();
     };
     for (const r of rows) {
+      // 週の見通しは、出す時に作り直す（月曜に出るなら「今週」）
+      const ahead = /^weekahead:(\d{4}-\d{2}-\d{2})$/.exec(r.kind);
+      if (ahead) {
+        if (room < 1) continue;
+        const today = jstDate();
+        out.push({ kind: r.kind, messages: [this.weekAhead(ahead[1], today < ahead[1] ? "来週" : "今週", today)] });
+        room -= 1;
+        continue;
+      }
       const undecided = /^undecided:(\d+)$/.exec(r.kind);
       let messages = (JSON.parse(r.payload) as OutMessage[]).filter((m) => {
         const asked = /引受 #(\d+)/.exec(JSON.stringify(m));
@@ -2458,9 +2511,9 @@ function daysLeftInMonth(today: string): number {
   return last - d + 1;
 }
 
-function isWeekend(date: string) {
-  const day = jstWeekday(date);
-  return day === 0 || day === 6;
+/** まとめての頼みで、祝日・年末年始なので入れなかった日の1行 */
+function skippedLine(days: string[], today: string) {
+  return `（${days.map((d) => `${dayLabel(d, today)}は${dayOffName(d) ?? "休みの日"}`).join("、")}なので、入れていません）`;
 }
 
 /** 本文で @名指しされた人（だんどりさん自身は除く） */

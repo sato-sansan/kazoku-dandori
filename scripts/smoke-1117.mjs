@@ -92,11 +92,13 @@ check(r.said.includes("全員お休み"), "全員お休み（1日）はふだん
 
 // 3 まとめての報告
 r = await send("Umama", "来週の月水金のお迎えはばあば、火木はパパ");
-check(/✅ お迎え ばあば：.+・.+・/.test(r.said) && /✅ お迎え パパ：/.test(r.said) && r.said.includes("［↩️ 取り消す］"), "まとめての報告：担当ごとに1行・取り消すボタン", r.said);
+// 11/18 から祝日は入れない（来週に祝日があれば、その日は「…なので、入れていません」の1行に）
+const offDays = (said) => ((said.split("\n").find((l) => l.includes("なので、入れていません")) ?? "").match(/\d+\/\d+（/g) ?? []).length;
+check(/✅ お迎え ばあば：.+/.test(r.said) && /✅ お迎え パパ：/.test(r.said) && (r.said.match(/\d+\/\d+（[月火水木金]）/g) ?? []).length + offDays(r.said) >= 5 && r.said.includes("［↩️ 取り消す］"), "まとめての報告：担当ごとに1行・取り消すボタン", r.said);
 // 4 まとめての「行ける人？」
 r = await send("Umama", "来週の送り、行ける人いる？");
 const bubbles = r.out.flatMap((l) => l.messages).filter((m) => m.type === "flex" && m.contents?.type === "carousel").map((m) => m.contents.contents.length)[0];
-check(bubbles === 5 && r.said.includes("まとめて聞きます（5件）") && !r.said.includes("［ママ］"), "まとめて聞く：5日ぶんの札を1通・頼んだママのボタンは出ない", `bubbles=${bubbles} ${r.said}`);
+check(bubbles === 5 - offDays(r.said) && r.said.includes(`まとめて聞きます（${bubbles}件）`) && !r.said.includes("［ママ］"), "まとめて聞く：祝日を除いた日ぶんの札を1通・頼んだママのボタンは出ない", `bubbles=${bubbles} ${r.said}`);
 // 1日だけの報告はふだんどおり
 r = await send("Upapa", "明後日のお迎えはじいじになりました");
 check(/✅ .+のお迎えは じいじ。/.test(r.said), "1日だけの報告はふだんどおり", r.said);

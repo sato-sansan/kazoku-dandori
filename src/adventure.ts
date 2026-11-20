@@ -1,6 +1,7 @@
 // 家族の冒険。引受・ありがとうの記録（FamilyEvent）から経験値・称号・今週のファインプレーを出し、
 // 日曜20:00のカードを組み立てる。全部純粋関数。順位は作らない（家族は1つのチーム）
 
+import { isDayOff } from "./holiday";
 import { withButtons, type FlexMessage, type TextMessage } from "./line";
 import { ADULTS, type Adult, type FamilyEvent } from "./types";
 
@@ -162,14 +163,14 @@ function pickFinePlay(weekEvents: FamilyEvent[]): AdventureStats["finePlay"] {
 
 // ── 連続記録 ─────────────────────────────────────────
 // 今週の最終日から平日だけをさかのぼり、「count の記録が1つ以上ある日」が何日続いたか。
-// 土日は数えず、途切れもしない（送迎のない日だから）。祝日は見ていない
+// 土日・祝日・年末年始は数えず、途切れもしない（送迎のない日だから）
 
 function weekdayStreak(events: FamilyEvent[], weekEnd: number, count: (e: FamilyEvent) => boolean): number {
   const countDays = new Set(events.filter(count).map((e) => jstDay(e.at)));
   let days = 0;
   for (let i = 0; i < STREAK_LOOKBACK_DAYS; i++) {
     const at = weekEnd - 1 - i * DAY_MS;
-    if (isWeekend(at)) continue;
+    if (isDayOff(jstDay(at))) continue;
     if (!countDays.has(jstDay(at))) break;
     days++;
   }
@@ -179,11 +180,6 @@ function weekdayStreak(events: FamilyEvent[], weekEnd: number, count: (e: Family
 /** 日本時間の日付キー（YYYY-MM-DD）。Workers は UTC なので 9 時間ずらす */
 function jstDay(ms: number) {
   return new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 10);
-}
-
-function isWeekend(ms: number) {
-  const dow = new Date(ms + JST_OFFSET_MS).getUTCDay();
-  return dow === 0 || dow === 6;
 }
 
 function jstMonth(ms: number) {
